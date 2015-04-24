@@ -1,7 +1,7 @@
 /*
  * arch/arm/mach-tegra/board-ventana-panel.c
  *
- * Copyright (c) 2010-2012 NVIDIA Corporation.
+ * Copyright (c) 2010-2013 NVIDIA Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -48,6 +48,7 @@
 #define ventana_lvds_to_bl_ms	200
 
 static struct regulator *pnl_pwr;
+static struct regulator *vdd_ldo4;
 
 #ifdef CONFIG_TEGRA_DC
 static struct regulator *ventana_hdmi_reg = NULL;
@@ -104,11 +105,17 @@ static struct platform_device ventana_backlight_device = {
 #ifdef CONFIG_TEGRA_DC
 static int ventana_panel_enable(void)
 {
-	struct regulator *reg = regulator_get(NULL, "vdd_ldo4");
+	if (vdd_ldo4 == NULL) {
+		vdd_ldo4 = regulator_get(NULL, "vdd_ldo4");
 
-	if (!reg) {
-		regulator_enable(reg);
-		regulator_put(reg);
+		if (IS_ERR(vdd_ldo4)) {
+			pr_err("%s: couldn't get regulator vdd_ldo4: %ld\n",
+					__func__, PTR_ERR(vdd_ldo4));
+		} else {
+			regulator_enable(vdd_ldo4);
+			regulator_disable(vdd_ldo4);
+			regulator_put(vdd_ldo4);
+		}
 	}
 
 	if (pnl_pwr == NULL) {
@@ -433,9 +440,16 @@ int __init ventana_panel_init(void)
 	tegra_move_framebuffer(tegra_fb_start, tegra_bootloader_fb_start,
 		min(tegra_fb_size, tegra_bootloader_fb_size));
 
-	/* Copy the bootloader fb to the fb2. */
-	tegra_move_framebuffer(tegra_fb2_start, tegra_bootloader_fb_start,
-		min(tegra_fb2_size, tegra_bootloader_fb_size));
+	/*
+	 * If the bootloader fb2 is valid, copy it to the fb2, or else
+	 * clear fb2 to avoid garbage on dispaly2.
+	 */
+	if (tegra_bootloader_fb2_size)
+		tegra_move_framebuffer(tegra_fb2_start,
+			tegra_bootloader_fb2_start,
+			min(tegra_fb2_size, tegra_bootloader_fb2_size));
+	else
+		tegra_clear_framebuffer(tegra_fb2_start, tegra_fb2_size);
 
 
 #if defined(CONFIG_TEGRA_GRHOST) && defined(CONFIG_TEGRA_DC)

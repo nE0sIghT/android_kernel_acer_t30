@@ -29,6 +29,7 @@
 #include <linux/bitops.h>
 #include <linux/sched.h>
 #include <linux/cpufreq.h>
+#include <linux/of.h>
 
 #include <asm/hardware/cache-l2x0.h>
 #include <asm/system.h>
@@ -91,6 +92,8 @@
 
 unsigned long tegra_bootloader_fb_start;
 unsigned long tegra_bootloader_fb_size;
+unsigned long tegra_bootloader_fb2_start;
+unsigned long tegra_bootloader_fb2_size;
 unsigned long tegra_fb_start;
 unsigned long tegra_fb_size;
 unsigned long tegra_fb2_start;
@@ -311,6 +314,20 @@ static inline void tegra_init_cache_tz(bool init)
 #endif	/* CONFIG_TRUSTED_FOUNDATIONS  */
 
 #ifdef CONFIG_CACHE_L2X0
+/*
+ * We define our own outer_disable() to avoid L2 flush upon LP2 entry.
+ * Since the Tegra kernel will always be in single core mode when
+ * L2 is being disabled, we can omit the locking. Since we are not
+ * accessing the spinlock we also avoid the problem of the spinlock
+ * storage getting out of sync.
+ */
+static inline void tegra_l2x0_disable(void)
+{
+	void __iomem *p = IO_ADDRESS(TEGRA_ARM_PERIF_BASE) + 0x3000;
+	writel_relaxed(0, p + L2X0_CTRL);
+	dsb();
+}
+
 void tegra_init_cache(bool init)
 {
 #ifdef CONFIG_TRUSTED_FOUNDATIONS
@@ -357,6 +374,8 @@ void tegra_init_cache(bool init)
 	aux_ctrl |= 0x7C000001;
 	if (init) {
 		l2x0_init(p, aux_ctrl, 0x8200c3fe);
+		/* use our outer_disable() routine to avoid flush */
+		outer_cache.disable = tegra_l2x0_disable;
 	} else {
 		u32 tmp;
 
@@ -486,6 +505,21 @@ static int __init tegra_bootloader_fb_arg(char *options)
 	return 0;
 }
 early_param("tegra_fbmem", tegra_bootloader_fb_arg);
+
+static int __init tegra_bootloader_fb2_arg(char *options)
+{
+	char *p = options;
+
+	tegra_bootloader_fb2_size = memparse(p, &p);
+	if (*p == '@')
+		tegra_bootloader_fb2_start = memparse(p+1, &p);
+
+	pr_info("Found tegra_fbmem2: %08lx@%08lx\n",
+		tegra_bootloader_fb2_size, tegra_bootloader_fb2_start);
+
+	return 0;
+}
+early_param("tegra_fbmem2", tegra_bootloader_fb2_arg);
 
 static int __init tegra_sku_override(char *id)
 {
@@ -644,11 +678,54 @@ __setup("audio_codec=", tegra_audio_codec_type);
 
 void tegra_get_board_info(struct board_info *bi)
 {
-	bi->board_id = (system_serial_high >> 16) & 0xFFFF;
-	bi->sku = (system_serial_high) & 0xFFFF;
-	bi->fab = (system_serial_low >> 24) & 0xFF;
-	bi->major_revision = (system_serial_low >> 16) & 0xFF;
-	bi->minor_revision = (system_serial_low >> 8) & 0xFF;
+#ifdef CONFIG_OF
+	struct device_node *board_info;
+	u32 prop_val;
+	int err;
+
+	board_info = of_find_node_by_path("/chosen/board_info");
+	if (!IS_ERR_OR_NULL(board_info)) {
+		memset(bi, 0, sizeof(*bi));
+
+		err = of_property_read_u32(board_info, "id", &prop_val);
+		if (err)
+			pr_err("failed to read /chosen/board_info/id\n");
+		else
+			bi->board_id = prop_val;
+
+		err = of_property_read_u32(board_info, "sku", &prop_val);
+		if (err)
+			pr_err("failed to read /chosen/board_info/sku\n");
+		else
+			bi->sku = prop_val;
+
+		err = of_property_read_u32(board_info, "fab", &prop_val);
+		if (err)
+			pr_err("failed to read /chosen/board_info/fab\n");
+		else
+			bi->fab = prop_val;
+
+		err = of_property_read_u32(board_info, "major_revision", &prop_val);
+		if (err)
+			pr_err("failed to read /chosen/board_info/major_revision\n");
+		else
+			bi->major_revision = prop_val;
+
+		err = of_property_read_u32(board_info, "minor_revision", &prop_val);
+		if (err)
+			pr_err("failed to read /chosen/board_info/minor_revision\n");
+		else
+			bi->minor_revision = prop_val;
+	} else {
+#endif
+		bi->board_id = (system_serial_high >> 16) & 0xFFFF;
+		bi->sku = (system_serial_high) & 0xFFFF;
+		bi->fab = (system_serial_low >> 24) & 0xFF;
+		bi->major_revision = (system_serial_low >> 16) & 0xFF;
+		bi->minor_revision = (system_serial_low >> 8) & 0xFF;
+#ifdef CONFIG_OF
+	}
+#endif
 }
 
 static int __init tegra_pmu_board_info(char *info)
@@ -736,56 +813,6 @@ int tegra_get_commchip_id(void)
 
 __setup("commchip_id=", tegra_commchip_id);
 
-#if defined(CONFIG_ARCH_ACER_T30)
-int acer_board_type;
-int acer_board_id;
-int acer_sku;
-int acer_wifi_module;
-
-static int __init hw_ver_arg(char *options)
-{
-	int hw_ver = 0;
-	int sku_type = 0;
-	int sku_lte  = 0;
-	acer_board_type = 0;
-	acer_board_id = 0;
-	acer_sku = 0;
-	acer_wifi_module = 0;
-
-	hw_ver = simple_strtoul(options, &options, 16);
-	/*
-	 *   4bits      1byte      4bits     1bit   1bit   1bit  1bit
-	 * | sku # | board type | board id | empty | LTE | wifi | 3G |
-	 */
-
-	acer_board_type  = (hw_ver & 0xf00) >> 8;
-
-	/* dirty hack to force Picasso M board */
-#if defined(CONFIG_MACH_PICASSO_M)
-	acer_board_type  = BOARD_PICASSO_M;
-#endif
-	acer_board_id    = (hw_ver & 0xf0) >> 4;
-	sku_type         = (hw_ver & 0x1);
-	acer_wifi_module = (hw_ver & 0x2) >> 1;
-	sku_lte          = (hw_ver & 0x4) >> 2;
-
-	if (sku_type && sku_lte)
-		acer_sku = BOARD_SKU_LTE;
-	else if (sku_type && !sku_lte)
-		acer_sku = BOARD_SKU_3G;
-	else
-		acer_sku = BOARD_SKU_WIFI;
-
-	if (acer_wifi_module == BOARD_WIFI_AH663)
-		acer_wifi_module = BOARD_WIFI_AH663;
-	else
-		acer_wifi_module = BOARD_WIFI_NH660;
-
-	return 0;
-}
-early_param("hw_ver", hw_ver_arg);
-#endif
-
 /*
  * Tegra has a protected aperture that prevents access by most non-CPU
  * memory masters to addresses above the aperture value.  Enabling it
@@ -850,6 +877,30 @@ void tegra_move_framebuffer(unsigned long to, unsigned long from,
 		iounmap(from_io);
 	}
 out:
+	iounmap(to_io);
+}
+
+void tegra_clear_framebuffer(unsigned long to, unsigned long size)
+{
+	void __iomem *to_io;
+	unsigned long i;
+
+	BUG_ON(PAGE_ALIGN((unsigned long)to) != (unsigned long)to);
+	BUG_ON(PAGE_ALIGN(size) != size);
+
+	to_io = ioremap(to, size);
+	if (!to_io) {
+		pr_err("%s: Failed to map target framebuffer\n", __func__);
+		return;
+	}
+
+	if (pfn_valid(page_to_pfn(phys_to_page(to)))) {
+		for (i = 0 ; i < size; i += PAGE_SIZE)
+			memset(to_io + i, 0, PAGE_SIZE);
+	} else {
+		for (i = 0; i < size; i += 4)
+			writel(0, to_io + i);
+	}
 	iounmap(to_io);
 }
 
@@ -929,19 +980,36 @@ void __init tegra_reserve(unsigned long carveout_size, unsigned long fb_size,
 		}
 	}
 
+	if (tegra_bootloader_fb2_size) {
+		tegra_bootloader_fb2_size =
+				PAGE_ALIGN(tegra_bootloader_fb2_size);
+		if (memblock_reserve(tegra_bootloader_fb2_start,
+				tegra_bootloader_fb2_size)) {
+			pr_err("Failed to reserve bootloader frame buffer2 "
+				"%08lx@%08lx\n", tegra_bootloader_fb2_size,
+				tegra_bootloader_fb2_start);
+			tegra_bootloader_fb2_start = 0;
+			tegra_bootloader_fb2_size = 0;
+		}
+	}
+
 	pr_info("Tegra reserved memory:\n"
-		"LP0:                    %08lx - %08lx\n"
-		"Bootloader framebuffer: %08lx - %08lx\n"
-		"Framebuffer:            %08lx - %08lx\n"
-		"2nd Framebuffer:        %08lx - %08lx\n"
-		"Carveout:               %08lx - %08lx\n"
-		"Vpr:                    %08lx - %08lx\n",
+		"LP0:                     %08lx - %08lx\n"
+		"Bootloader framebuffer:  %08lx - %08lx\n"
+		"Bootloader framebuffer2: %08lx - %08lx\n"
+		"Framebuffer:             %08lx - %08lx\n"
+		"2nd Framebuffer:         %08lx - %08lx\n"
+		"Carveout:                %08lx - %08lx\n"
+		"Vpr:                     %08lx - %08lx\n",
 		tegra_lp0_vec_start,
 		tegra_lp0_vec_size ?
 			tegra_lp0_vec_start + tegra_lp0_vec_size - 1 : 0,
 		tegra_bootloader_fb_start,
 		tegra_bootloader_fb_size ?
-			tegra_bootloader_fb_start + tegra_bootloader_fb_size - 1 : 0,
+		 tegra_bootloader_fb_start + tegra_bootloader_fb_size - 1 : 0,
+		tegra_bootloader_fb2_start,
+		tegra_bootloader_fb2_size ?
+		 tegra_bootloader_fb2_start + tegra_bootloader_fb2_size - 1 : 0,
 		tegra_fb_start,
 		tegra_fb_size ?
 			tegra_fb_start + tegra_fb_size - 1 : 0,
@@ -1008,6 +1076,10 @@ void __init tegra_release_bootloader_fb(void)
 		if (memblock_free(tegra_bootloader_fb_start,
 						tegra_bootloader_fb_size))
 			pr_err("Failed to free bootloader fb.\n");
+	if (tegra_bootloader_fb2_size)
+		if (memblock_free(tegra_bootloader_fb2_start,
+						tegra_bootloader_fb2_size))
+			pr_err("Failed to free bootloader fb2.\n");
 }
 
 #ifdef CONFIG_TEGRA_CONVSERVATIVE_GOV_ON_EARLYSUPSEND

@@ -24,6 +24,7 @@
 
 #include <linux/pm.h>
 #include <linux/types.h>
+#include <linux/fb.h>
 #include <drm/drm_fixed.h>
 
 #define TEGRA_MAX_DC		2
@@ -279,25 +280,6 @@ struct tegra_dc_sd_agg_priorities {
 	u8 agg[4];
 };
 
-#if defined(CONFIG_ACER_DIDIM_RULE)
-#define TEGRA_DC_SD_AGGRESSIVENESS_LIST_SIZE 2
-#define TEGRA_DC_SD_TABLE_SIZE 3
-
-enum {
-	SD_PROFILE_UNKNOWN = 0,
-	SD_PROFILE_HIGH = 1,
-	SD_PROFILE_BALANCED = 2,
-	SD_PROFILE_POWER_SAVER = 3,
-	SD_PROFILE_END = 4,
-};
-
-struct tegra_dc_sd_map {
-	u8 profile;
-	u8 aggress_list[TEGRA_DC_SD_AGGRESSIVENESS_LIST_SIZE];
-};
-#endif
-
-
 struct tegra_dc_sd_settings {
 	unsigned enable;
 	bool use_auto_pwm;
@@ -325,11 +307,6 @@ struct tegra_dc_sd_settings {
 
 	atomic_t *sd_brightness;
 	struct platform_device *bl_device;
-#if defined(CONFIG_ACER_DIDIM_RULE)
-	u8 aggress_list[TEGRA_DC_SD_AGGRESSIVENESS_LIST_SIZE];
-	u8 scenario;
-	struct tegra_dc_sd_map aggress_table[TEGRA_DC_SD_TABLE_SIZE];
-#endif
 };
 
 enum {
@@ -392,6 +369,8 @@ struct tegra_dc_out {
 
 	u8			*out_sel_configs;
 	unsigned		n_out_sel_configs;
+	bool			user_needs_vblank;
+	struct completion	user_vblank_comp;
 
 	int	(*enable)(void);
 	int	(*postpoweron)(void);
@@ -549,6 +528,8 @@ bool tegra_dc_get_connected(struct tegra_dc *);
 bool tegra_dc_hpd(struct tegra_dc *dc);
 
 
+void tegra_dc_get_fbvblank(struct tegra_dc *dc, struct fb_vblank *vblank);
+int tegra_dc_wait_for_vsync(struct tegra_dc *dc);
 void tegra_dc_blank(struct tegra_dc *dc);
 
 void tegra_dc_enable(struct tegra_dc *dc);

@@ -20,15 +20,10 @@
 #include <linux/earlysuspend.h>
 #endif
 
-#if defined(CONFIG_MACH_PICASSO_M)
-#include <linux/input/mxt1386e_pm.h>
-#elif defined(CONFIG_MACH_PICASSO2)
-#include <linux/input/mxt1386e_p2.h>
-#elif defined(CONFIG_MACH_PICASSO_MF)
-#include <linux/input/mxt1386e_pmf.h>
-#else
-#include <linux/input/mxt1386e_p2.h>
-#endif
+#include "../../../arch/arm/mach-tegra/board-acer-t30.h"
+#include "../../../arch/arm/mach-tegra/gpio-names.h"
+
+#include <linux/input/mxt1386e_p.h>
 
 #define ATMEL1386E_IOCTL_MAGIC 't'
 #define ATMEL1386E_FirmwareVersion            _IOR(ATMEL1386E_IOCTL_MAGIC, 0x01, int)
@@ -48,6 +43,11 @@
 #define TP_INT                                TEGRA_GPIO_PJ0
 
 #define ConfigUpdateFlag                      1
+
+extern int acer_board_type;
+
+int x_max, y_max;
+int ConfigChecksum, ConfigVersion;
 
 struct point_data {
 	short Status;
@@ -77,7 +77,7 @@ static bool B = 0;       /* 0: AC PLUG IN    1: AC PLUG OUT   */
 static bool S = 0;       /* H || B */
 static bool S_check = 0; /* Record the status of S */
 
-#if defined(CONFIG_MACH_PICASSO_MF) || defined(CONFIG_MACH_PICASSO_M)
+#ifdef CONFIG_ARCH_ACER_T30
 static bool bending_enable = 1;
 #endif
 
@@ -226,7 +226,7 @@ struct mxt_data
 	struct input_dev     *input;
 	struct work_struct   init_dwork;
 	struct work_struct   touch_dwork;
-#if defined(CONFIG_MACH_PICASSO_MF) || defined(CONFIG_MACH_PICASSO_M)
+#if defined(CONFIG_ARCH_ACER_T30)
 	struct delayed_work  bending_dwork;
 #endif
 	struct point_data    PointBuf[NUM_FINGERS];
@@ -252,7 +252,7 @@ static int ATMEL_Issleep(struct mxt_data *mxt);
 static int ATMEL_Resume(struct mxt_data *mxt);
 static int ATMEL_IsResume(struct mxt_data *mxt);
 static int ATMEL_Calibrate(struct mxt_data *mxt);
-#if defined(CONFIG_MACH_PICASSO_MF) || defined(CONFIG_MACH_PICASSO_M)
+#ifdef CONFIG_ARCH_ACER_T30
 static int ATMEL_Bending_On_Off(struct mxt_data *mxt, u8 cfg_switch);
 #endif
 #ifdef CONFIG_HAS_EARLYSUSPEND
@@ -538,9 +538,9 @@ static void touch_worker(struct work_struct *work)
 		mxt->PointBuf[ContactID].X = Buf;
 		Buf = buffer[3];
 		Buf = (Buf << 4) | (buffer[4] & 0x0F);
-#if defined(CONFIG_MACH_PICASSO_M)
-		Buf = Buf >> 2;
-#endif
+		if (acer_board_type == BOARD_PICASSO_M) {
+				Buf = Buf >> 2;
+		}
 		mxt->PointBuf[ContactID].Y = Buf;
 
 		if (debug == DEBUG_DETAIL) {
@@ -554,7 +554,7 @@ static void touch_worker(struct work_struct *work)
 		} else if (buffer[1] & 0x80) {
 			mxt->PointBuf[ContactID].Status = buffer[5];
 			mxt_debug(DEBUG_DETAIL, "Finger Touch!!\n");
-#if defined(CONFIG_MACH_PICASSO_MF) || defined(CONFIG_MACH_PICASSO_M)
+#ifdef CONFIG_ARCH_ACER_T30
 			if (bending_enable) {
 				mxt_debug(DEBUG_ERROR, "mXT1386E: enable lens bending\n");
 				bending_enable = 0;
@@ -613,7 +613,7 @@ next_irq:
 	return;
 }
 
-#if defined(CONFIG_MACH_PICASSO_MF) || defined(CONFIG_MACH_PICASSO_M)
+#ifdef CONFIG_ARCH_ACER_T30
 static void bending_worker(struct work_struct *work)
 {
 	struct mxt_data *mxt;
@@ -898,7 +898,7 @@ static ssize_t plugged_store(struct kobject *kobj, struct kobj_attribute *attr, 
 	}
 
 	mxt_debug(DEBUG_BASIC, "mXT1386E: S: %d\n", S);
-#if defined(CONFIG_MACH_PICASSO_MF) || defined(CONFIG_MACH_PICASSO_M)
+#ifdef CONFIG_ARCH_ACER_T30
 	if(S != S_check) {
 		if(S) {
 			mxt_debug(DEBUG_ERROR, "mXT1386E: update DI 2 to 4\n");
@@ -1098,11 +1098,7 @@ static int ATMEL_CheckOBJTableCRC(struct mxt_data *mxt)
 	u8 T24_VAL[19] = {0}, T25_VAL[6] = {0}, T27_VAL[7] = {0}, T38_VAL[64] = {0};
 	u8 T40_VAL[5] = {0}, T42_VAL[10] = {0}, T46_VAL[9] = {0};
 	u8 T47_VAL[10] = {0}, T48_VAL[54] = {0};
-#if defined(CONFIG_MACH_PICASSO_MF)
 	u8 T43_VAL[11] = {0}, T56_VAL[51] = {0}, T35_VAL[12] = {0}, T65_VAL[17] = {0};
-#else
-	u8 T43_VAL[7] = {0}, T56_VAL[43] = {0};
-#endif
 
 	u8 i, z, Value;
 	u32 Cal_crc = 0, InternalCRC;
@@ -1361,38 +1357,38 @@ static int ATMEL_CheckOBJTableCRC(struct mxt_data *mxt)
 		for(i=0;i<54;i++)
 			mxt_debug(DEBUG_DETAIL, " T48[%d] 0x%x\n", i, T48_VAL[i]);
 
-#if defined(CONFIG_MACH_PICASSO_MF)
-		if (mxt_read_block(mxt->client, T43_OBJAddr, 11, T43_VAL) < 0)
-			mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block failed\n");
-		for(i=0;i<11;i++)
-			mxt_debug(DEBUG_DETAIL, " T43[%d] 0x%x\n", i, T43_VAL[i]);
+		if (acer_board_type == BOARD_PICASSO_MF) {
+				if (mxt_read_block(mxt->client, T43_OBJAddr, 11, T43_VAL) < 0)
+					mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block failed\n");
+				for(i=0;i<11;i++)
+					mxt_debug(DEBUG_DETAIL, " T43[%d] 0x%x\n", i, T43_VAL[i]);
 
-		if (mxt_read_block(mxt->client, T56_OBJAddr, 51, T56_VAL) < 0)
-			mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block failed\n");
-		for(i=0;i<51;i++)
-			mxt_debug(DEBUG_DETAIL, " T56[%d] 0x%x\n", i, T56_VAL[i]);
+				if (mxt_read_block(mxt->client, T56_OBJAddr, 51, T56_VAL) < 0)
+					mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block failed\n");
+				for(i=0;i<51;i++)
+					mxt_debug(DEBUG_DETAIL, " T56[%d] 0x%x\n", i, T56_VAL[i]);
 
-		if (mxt_read_block(mxt->client, T35_OBJAddr, 12, T35_VAL) < 0)
-			mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block failed\n");
-		for(i=0;i<12;i++)
-			mxt_debug(DEBUG_DETAIL, " T35[%d] 0x%x\n", i, T35_VAL[i]);
+				if (mxt_read_block(mxt->client, T35_OBJAddr, 12, T35_VAL) < 0)
+					mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block failed\n");
+				for(i=0;i<12;i++)
+					mxt_debug(DEBUG_DETAIL, " T35[%d] 0x%x\n", i, T35_VAL[i]);
 
-		if (mxt_read_block(mxt->client, T65_OBJAddr, 17, T65_VAL) < 0)
-			mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block failed\n");
-		for(i=0;i<17;i++)
-			mxt_debug(DEBUG_DETAIL, " T65[%d] 0x%x\n", i, T65_VAL[i]);
+				if (mxt_read_block(mxt->client, T65_OBJAddr, 17, T65_VAL) < 0)
+					mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block failed\n");
+				for(i=0;i<17;i++)
+					mxt_debug(DEBUG_DETAIL, " T65[%d] 0x%x\n", i, T65_VAL[i]);
 
-#else
-		if (mxt_read_block(mxt->client, T43_OBJAddr, 7, T43_VAL) < 0)
-			mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block failed\n");
-		for(i=0;i<7;i++)
-			mxt_debug(DEBUG_DETAIL, " T43[%d] 0x%x\n", i, T43_VAL[i]);
+		} else {
+				if (mxt_read_block(mxt->client, T43_OBJAddr, 7, T43_VAL) < 0)
+					mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block failed\n");
+				for(i=0;i<7;i++)
+					mxt_debug(DEBUG_DETAIL, " T43[%d] 0x%x\n", i, T43_VAL[i]);
 
-		if (mxt_read_block(mxt->client, T56_OBJAddr, 43, T56_VAL) < 0)
-			mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block failed\n");
-		for(i=0;i<43;i++)
-			mxt_debug(DEBUG_DETAIL, " T56[%d] 0x%x\n", i, T56_VAL[i]);
-#endif
+				if (mxt_read_block(mxt->client, T56_OBJAddr, 43, T56_VAL) < 0)
+					mxt_debug(DEBUG_ERROR, "mXT1386E: mxt_read_block failed\n");
+				for(i=0;i<43;i++)
+					mxt_debug(DEBUG_DETAIL, " T56[%d] 0x%x\n", i, T56_VAL[i]);
+		}
 	}
 	kfree(buffer);
 
@@ -1450,7 +1446,7 @@ static int ATMEL_Calibrate(struct mxt_data *mxt)
 	return 0;
 }
 
-#if defined(CONFIG_MACH_PICASSO_MF) || defined(CONFIG_MACH_PICASSO_M)
+#ifdef CONFIG_ARCH_ACER_T30
 static int ATMEL_Bending_On_Off(struct mxt_data *mxt, u8 cfg_switch)
 {
 	u8 val[1] = {0};
@@ -1512,14 +1508,6 @@ static int ATMEL_WriteConfig(struct mxt_data *mxt)
 	if (acer_board_type == BOARD_PICASSO_M) {
 		if (mxt_write_block(mxt->client, T46_OBJAddr,  9, T46OBJ) < 0)
 			return -1;
-	} else if (acer_board_type == BOARD_PICASSO_2) {
-		if (acer_board_id == BOARD_DVT1) {
-			if (mxt_write_block(mxt->client, T46_OBJAddr,  9, T46OBJ_0) < 0)
-				return -1;
-		} else {
-			if (mxt_write_block(mxt->client, T46_OBJAddr,  9, T46OBJ) < 0)
-				return -1;
-		}
 	} else {
 		if (mxt_write_block(mxt->client, T46_OBJAddr,  9, T46OBJ) < 0)
 			return -1;
@@ -1531,25 +1519,25 @@ static int ATMEL_WriteConfig(struct mxt_data *mxt)
 	if (mxt_write_block(mxt->client, T48_OBJAddr, 54, T48OBJ) < 0)
 		return -1;
 
-#if defined(CONFIG_MACH_PICASSO_MF)
-	if (mxt_write_block(mxt->client, T43_OBJAddr, 11, T43OBJ) < 0)
-		return -1;
+	if (acer_board_type == BOARD_PICASSO_MF) {
+		if (mxt_write_block(mxt->client, T43_OBJAddr, 11, T43OBJ) < 0)
+			return -1;
 
-	if (mxt_write_block(mxt->client, T56_OBJAddr, 51, T56OBJ) < 0)
-		return -1;
+		if (mxt_write_block(mxt->client, T56_OBJAddr, 51, T56OBJ) < 0)
+			return -1;
 
-	if (mxt_write_block(mxt->client, T35_OBJAddr, 12, T35OBJ) < 0)
-		return -1;
+		if (mxt_write_block(mxt->client, T35_OBJAddr, 12, T35OBJ) < 0)
+			return -1;
 
-	if (mxt_write_block(mxt->client, T65_OBJAddr, 17, T65OBJ) < 0)
-		return -1;
-#else
-	if (mxt_write_block(mxt->client, T43_OBJAddr, 7, T43OBJ) < 0)
-		return -1;
+		if (mxt_write_block(mxt->client, T65_OBJAddr, 17, T65OBJ) < 0)
+			return -1;
+	} else {
+		if (mxt_write_block(mxt->client, T43_OBJAddr, 7, T43OBJ) < 0)
+			return -1;
 
-	if (mxt_write_block(mxt->client, T56_OBJAddr, 43, T56OBJ) < 0)
-		return -1;
-#endif
+		if (mxt_write_block(mxt->client, T56_OBJAddr, 43, T56OBJ) < 0)
+			return -1;
+	}
 
 	return 0;
 }
@@ -1823,6 +1811,47 @@ static int mxt_probe(struct i2c_client *client, const struct i2c_device_id *id)
 
 	mxt_debug(DEBUG_DETAIL, "mXT1386E: mxt_probe\n");
 
+	if (acer_board_type == BOARD_PICASSO_M) {
+		x_max = X_MAX_PM;
+		y_max = Y_MAX_PM;
+		ConfigChecksum = ConfigChecksum_PM;
+		ConfigVersion = ConfigVersion_PM;
+	} else if (acer_board_type == BOARD_PICASSO_MF) {
+		x_max = X_MAX_PMF;
+		y_max = Y_MAX_PMF;
+		ConfigChecksum = ConfigChecksum_PMF;
+		ConfigVersion = ConfigVersion_PMF;
+
+		// by default, these are initialized for PICASSO_M
+		T38OBJ[1] = 1;
+
+		T08OBJ[7] = 17;
+		T08OBJ[9] = 0;
+
+		T09OBJ[12] = 8;
+		T09OBJ[13] = 0;
+		T09OBJ[18] = 175;
+		T09OBJ[19] = 4;
+		T09OBJ[20] = 127;
+		T09OBJ[21] = 7;
+
+		T25OBJ[2] = 0;
+		T25OBJ[3] = 0;
+		T25OBJ[4] = 0;
+
+		T42OBJ[1] = 40;
+		T42OBJ[2] = 80;
+		T42OBJ[3] = 80;
+
+		T46OBJ_0[0] = 64;
+		T46OBJ_0[2] = 16;
+		T46OBJ_0[3] = 32;
+
+		T48OBJ[11] = 55;
+
+		T56OBJ[39] = 0;
+	}
+
 	if (client == NULL) {
 		mxt_debug(DEBUG_ERROR, "mXT1386E: client == NULL\n");
 		return	-EINVAL;
@@ -1862,7 +1891,7 @@ static int mxt_probe(struct i2c_client *client, const struct i2c_device_id *id)
 
 	INIT_WORK(&mxt->init_dwork, init_worker);
 	INIT_WORK(&mxt->touch_dwork, touch_worker);
-#if defined(CONFIG_MACH_PICASSO_MF) || defined(CONFIG_MACH_PICASSO_M)
+#ifdef CONFIG_ARCH_ACER_T30
 	INIT_DELAYED_WORK(&mxt->bending_dwork, bending_worker);
 #endif
 	set_bit(EV_ABS, input->evbit);
@@ -1874,12 +1903,12 @@ static int mxt_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	set_bit(ABS_Y, input->keybit);
 
 	/* single touch */
-	input_set_abs_params(input, ABS_X, X_MIN, X_MAX, 0, 0);
-	input_set_abs_params(input, ABS_Y, Y_MIN, Y_MAX, 0, 0);
+	input_set_abs_params(input, ABS_X, X_MIN, x_max, 0, 0);
+	input_set_abs_params(input, ABS_Y, Y_MIN, y_max, 0, 0);
 
 	/* multiple touch */
-	input_set_abs_params(input, ABS_MT_POSITION_X, X_MIN, X_MAX, 0, 0);
-	input_set_abs_params(input, ABS_MT_POSITION_Y, Y_MIN, Y_MAX, 0, 0);
+	input_set_abs_params(input, ABS_MT_POSITION_X, X_MIN, x_max, 0, 0);
+	input_set_abs_params(input, ABS_MT_POSITION_Y, Y_MIN, y_max, 0, 0);
 	input_set_abs_params(input, ABS_MT_TOUCH_MAJOR, 0, MXT_MAX_TOUCH_SIZE, 0, 0);
 	input_set_abs_params(input, ABS_MT_TRACKING_ID, 0, NUM_FINGERS,0, 0);
 	input_set_abs_params(input, ABS_MT_PRESSURE, 0, MXT_MAX_TOUCH_SIZE, 0, 0);
@@ -1986,7 +2015,7 @@ void mxt_early_suspend(struct early_suspend *h)
 	system will still go to suspend if i2c error,
 	but it will be blocked if sleep configs are not written to touch successfully
 	*/
-#if defined(CONFIG_MACH_PICASSO_MF) || defined(CONFIG_MACH_PICASSO_M)
+#ifdef CONFIG_ARCH_ACER_T30
 	bending_enable = 1;
 	if (ATMEL_Bending_On_Off(data, 0) < 0)
 		mxt_debug(DEBUG_ERROR, "mXT1386E: Bending Disable failed\n");

@@ -38,8 +38,12 @@
 #include <linux/i2c/atmel_mxt_ts.h>
 #include <linux/memblock.h>
 #include <linux/rfkill-gpio.h>
+#include <linux/mfd/tlv320aic3262-registers.h>
+#include <linux/mfd/tlv320aic3262-core.h>
 
 #include <linux/nfc/pn544.h>
+#include <linux/skbuff.h>
+#include <linux/ti_wilink_st.h>
 #include <sound/max98088.h>
 
 #include <mach/clk.h>
@@ -122,6 +126,32 @@ static struct tegra_thermal_data thermal_data = {
 #endif
 };
 
+/* wl128x BT, FM, GPS connectivity chip */
+struct ti_st_plat_data enterprise_wilink_pdata = {
+	.nshutdown_gpio = TEGRA_GPIO_PE6,
+	.dev_name = BLUETOOTH_UART_DEV_NAME,
+	.flow_cntrl = 1,
+	.baud_rate = 3000000,
+};
+
+static struct platform_device wl128x_device = {
+	.name		= "kim",
+	.id		= -1,
+	.dev.platform_data = &enterprise_wilink_pdata,
+};
+
+static struct platform_device btwilink_device = {
+	.name = "btwilink",
+	.id = -1,
+};
+
+static noinline void __init enterprise_bt_st(void)
+{
+	pr_info("enterprise_bt_st");
+
+	platform_device_register(&wl128x_device);
+	platform_device_register(&btwilink_device);
+}
 static struct rfkill_gpio_platform_data enterprise_bt_rfkill_pdata[] = {
 	{
 		.name           = "bt_rfkill",
@@ -138,8 +168,21 @@ static struct platform_device enterprise_bt_rfkill_device = {
 		.platform_data = &enterprise_bt_rfkill_pdata,
 	},
 };
-
-static struct resource enterprise_bluesleep_resources[] = {
+static struct resource enterprise_ti_bluesleep_resources[] = {
+	[0] = {
+		.name = "gpio_host_wake",
+			.start  = TEGRA_GPIO_PS2,
+			.end    = TEGRA_GPIO_PS2,
+			.flags  = IORESOURCE_IO,
+	},
+	[1] = {
+		.name = "host_wake",
+			.start	= TEGRA_GPIO_TO_IRQ(TEGRA_GPIO_PS2),
+			.end	= TEGRA_GPIO_TO_IRQ(TEGRA_GPIO_PS2),
+			.flags	= IORESOURCE_IRQ | IORESOURCE_IRQ_HIGHEDGE,
+	},
+};
+static struct resource enterprise_brcm_bluesleep_resources[] = {
 	[0] = {
 		.name = "gpio_host_wake",
 			.start  = TEGRA_GPIO_PS2,
@@ -160,16 +203,30 @@ static struct resource enterprise_bluesleep_resources[] = {
 	},
 };
 
-static struct platform_device enterprise_bluesleep_device = {
+static struct platform_device enterprise_ti_bluesleep_device = {
 	.name           = "bluesleep",
 	.id             = -1,
-	.num_resources  = ARRAY_SIZE(enterprise_bluesleep_resources),
-	.resource       = enterprise_bluesleep_resources,
+	.num_resources  = ARRAY_SIZE(enterprise_ti_bluesleep_resources),
+	.resource       = enterprise_ti_bluesleep_resources,
 };
 
+static struct platform_device enterprise_brcm_bluesleep_device = {
+	.name           = "bluesleep",
+	.id             = -1,
+	.num_resources  = ARRAY_SIZE(enterprise_brcm_bluesleep_resources),
+	.resource       = enterprise_brcm_bluesleep_resources,
+};
+static void __init enterprise_bt_rfkill(void)
+{
+	platform_device_register(&enterprise_bt_rfkill_device);
+	return;
+}
 static void __init enterprise_setup_bluesleep(void)
 {
-	platform_device_register(&enterprise_bluesleep_device);
+	if (tegra_get_commchip_id() == COMMCHIP_TI_WL18XX)
+		platform_device_register(&enterprise_ti_bluesleep_device);
+	else
+		platform_device_register(&enterprise_brcm_bluesleep_device);
 	return;
 }
 
@@ -194,6 +251,7 @@ static __initdata struct tegra_clk_init_table enterprise_clk_init_table[] = {
 	{ "audio3",	"i2s3_sync",	0,		false},
 	{ "vi",		"pll_p",	0,		false},
 	{ "vi_sensor",	"pll_p",	0,		false},
+	{ "i2c5",	"pll_p",	3200000,	false},
 	{ NULL,		NULL,		0,		0},
 };
 
@@ -207,6 +265,45 @@ static __initdata struct tegra_clk_init_table enterprise_clk_i2s4_table[] = {
 	/* name		parent		rate		enabled */
 	{ "i2s4",	"pll_a_out0",	0,		false},
 	{ NULL,		NULL,		0,		0},
+};
+
+static struct aic3262_gpio_setup aic3262_gpio[] = {
+	/* GPIO 1*/
+	{
+		.used		= 1,
+		.in		= 0,
+		.value		= AIC3262_GPIO1_FUNC_INT1_OUTPUT ,
+	},
+	/* GPIO 2*/
+	{
+		.used		= 1,
+		.in		= 0,
+		.value		= AIC3262_GPIO2_FUNC_ADC_MOD_CLK_OUTPUT,
+	},
+	/* GPIO 1 */
+	{
+		.used		= 0,
+	},
+	{// GPI2
+		.used		= 1,
+		.in		= 1,
+		.in_reg         = AIC3262_DMIC_INPUT_CNTL,
+		.in_reg_bitmask	= AIC3262_DMIC_CONFIGURE_MASK,
+		.in_reg_shift	= AIC3262_DMIC_CONFIGURE_SHIFT,
+		.value		= AIC3262_DMIC_GPI2_LEFT_GPI2_RIGHT,
+	},
+	{// GPO1
+		.used		= 0,
+		.value		= AIC3262_GPO1_FUNC_DISABLED,
+	},
+};
+
+static struct aic3262_pdata aic3262_codec_pdata = {
+	.gpio_irq	= 1,
+	.gpio_reset	= TEGRA_GPIO_CODEC_RST,
+	.gpio		= aic3262_gpio,
+	.naudint_irq	= TEGRA_GPIO_HP_DET,
+	.irq_base	= AIC3262_CODEC_IRQ_BASE,
 };
 
 static struct tegra_i2c_platform_data enterprise_i2c1_platform_data = {
@@ -249,7 +346,7 @@ static struct tegra_i2c_platform_data enterprise_i2c4_platform_data = {
 static struct tegra_i2c_platform_data enterprise_i2c5_platform_data = {
 	.adapter_nr	= 4,
 	.bus_count	= 1,
-	.bus_clk_rate	= { 400000, 0 },
+	.bus_clk_rate	= { 390000, 0 },
 	.scl_gpio		= {TEGRA_GPIO_PZ6, 0},
 	.sda_gpio		= {TEGRA_GPIO_PZ7, 0},
 	.arb_recovery = arb_lost_recovery,
@@ -363,8 +460,9 @@ static struct i2c_board_info __initdata max98088_board_info = {
 };
 
 static struct i2c_board_info __initdata enterprise_codec_aic326x_info = {
-	I2C_BOARD_INFO("aic3262-codec", 0x18),
-	.irq = TEGRA_GPIO_TO_IRQ(TEGRA_GPIO_HP_DET),
+	I2C_BOARD_INFO("tlv320aic3262", 0x18),
+	.platform_data = &aic3262_codec_pdata,
+	.irq = TEGRA_GPIO_HP_DET,
 };
 
 static struct i2c_board_info __initdata nfc_board_info = {
@@ -513,7 +611,7 @@ static struct tegra_asoc_platform_data enterprise_audio_pdata = {
 	/*defaults for Enterprise board*/
 	.i2s_param[HIFI_CODEC]	= {
 		.audio_port_id	= 0,
-		.is_i2s_master	= 1,
+		.is_i2s_master	= 0,
 		.i2s_mode	= TEGRA_DAIFMT_I2S,
 		.sample_size	= 16,
 	},
@@ -591,7 +689,6 @@ static struct platform_device *enterprise_devices[] __initdata = {
 	&tegra_avp_device,
 #endif
 	&tegra_camera,
-	&enterprise_bt_rfkill_device,
 	&tegra_spi_device4,
 	&tegra_hda_device,
 #if defined(CONFIG_CRYPTO_DEV_TEGRA_SE)
@@ -702,6 +799,14 @@ static void enterprise_usb_hsic_preresume(void)
 #endif
 }
 
+static void enterprise_usb_hsic_post_resume(void)
+{
+	pr_debug("%s\n", __func__);
+#ifdef CONFIG_TEGRA_BB_XMM_POWER
+	baseband_xmm_set_power_status(BBXMM_PS_L0);
+#endif
+}
+
 static void enterprise_usb_hsic_phy_power(void)
 {
 	pr_debug("%s\n", __func__);
@@ -722,6 +827,7 @@ static struct tegra_usb_phy_platform_ops hsic_xmm_plat_ops = {
 	.post_suspend = enterprise_usb_hsic_postsupend,
 	.pre_resume = enterprise_usb_hsic_preresume,
 	.port_power = enterprise_usb_hsic_phy_power,
+	.post_resume = enterprise_usb_hsic_post_resume,
 	.post_phy_off = enterprise_usb_hsic_post_phy_off,
 };
 
@@ -736,17 +842,8 @@ static struct tegra_usb_platform_data tegra_ehci2_hsic_xmm_pdata = {
 		.remote_wakeup_supported = false,
 		.power_off_on_suspend = false,
 	},
-	.u_cfg.hsic = {
-		.sync_start_delay = 9,
-		.idle_wait_delay = 17,
-		.term_range_adj = 0,
-		.elastic_underrun_limit = 16,
-		.elastic_overrun_limit = 16,
-	},
 	.ops = &hsic_xmm_plat_ops,
 };
-
-
 
 static struct tegra_usb_platform_data tegra_udc_pdata = {
 	.port_otg = true,
@@ -840,9 +937,15 @@ error:
 	return NULL;
 }
 
-void tegra_usb_hsic_host_unregister(struct platform_device *pdev)
+void tegra_usb_hsic_host_unregister(struct platform_device **platdev)
 {
-	platform_device_unregister(pdev);
+	struct platform_device *pdev = *platdev;
+
+	if (pdev && &pdev->dev) {
+		platform_device_unregister(pdev);
+		*platdev = NULL;
+	} else
+		pr_err("%s: no platform device\n", __func__);
 }
 
 static void enterprise_usb_init(void)
@@ -876,18 +979,31 @@ static void enterprise_audio_init(void)
 
 	tegra_get_board_info(&board_info);
 
-	if (board_info.board_id == BOARD_E1197)
-		enterprise_audio_pdata.i2s_param[HIFI_CODEC].audio_port_id = 1;
-	else if (board_info.fab == BOARD_FAB_A04) {
-		enterprise_audio_pdata.i2s_param[BASEBAND].audio_port_id = 4;
+	if (board_info.board_id == BOARD_E1239) {
+		enterprise_audio_aic326x_pdata.i2s_param[BASEBAND].
+					audio_port_id = 4;
+		enterprise_audio_aic326x_pdata.i2s_param[BASEBAND].
+					i2s_mode	= TEGRA_DAIFMT_I2S;
+		enterprise_audio_aic326x_pdata.i2s_param[BASEBAND].
+					channels	= 2;
 		platform_device_register(&tegra_i2s_device4);
 	} else {
-		enterprise_audio_pdata.i2s_param[BASEBAND].audio_port_id = 2;
-		platform_device_register(&tegra_i2s_device2);
-	}
+		if (board_info.board_id == BOARD_E1197)
+			enterprise_audio_pdata.i2s_param[HIFI_CODEC].
+					audio_port_id = 1;
+		else if (board_info.fab == BOARD_FAB_A04) {
+			enterprise_audio_pdata.i2s_param[BASEBAND].
+					audio_port_id = 4;
+			platform_device_register(&tegra_i2s_device4);
+		} else {
+			enterprise_audio_pdata.i2s_param[BASEBAND].
+					audio_port_id = 2;
+			platform_device_register(&tegra_i2s_device2);
+		}
 
+	}
 	platform_add_devices(enterprise_audio_devices,
-			ARRAY_SIZE(enterprise_audio_devices));
+		ARRAY_SIZE(enterprise_audio_devices));
 }
 
 
@@ -954,7 +1070,11 @@ static struct platform_device tegra_baseband_m7400_device = {
 
 static void enterprise_baseband_init(void)
 {
+	struct board_info board_info;
+
 	int modem_id = tegra_get_modem_id();
+
+	tegra_get_board_info(&board_info);
 
 	switch (modem_id) {
 	case TEGRA_BB_PH450: /* PH450 ULPI */
@@ -968,7 +1088,13 @@ static void enterprise_baseband_init(void)
 						&tegra_usb_hsic_host_register;
 		tegra_baseband_power_data.hsic_unregister =
 						&tegra_usb_hsic_host_unregister;
-
+		if ((board_info.board_id == BOARD_E1239) &&
+			(board_info.fab <= BOARD_FAB_A02)) {
+			tegra_baseband_power_data.modem.
+				xmm.ipc_hsic_active  = BB_GPIO_LCD_PWR2;
+			tegra_baseband_power_data.modem.
+				xmm.ipc_hsic_sus_req = BB_GPIO_LCD_PWR1;
+		}
 		platform_device_register(&tegra_baseband_power_device);
 		platform_device_register(&tegra_baseband_power2_device);
 		break;
@@ -990,6 +1116,8 @@ static void enterprise_nfc_init(void)
 	tegra_get_board_info(&bi);
 	if (bi.board_id == BOARD_E1205 && bi.fab >= BOARD_FAB_A03) {
 		nfc_pdata.firm_gpio = TEGRA_GPIO_PX7;
+	} else if (bi.board_id == BOARD_E1239) {
+		nfc_pdata.firm_gpio = TEGRA_GPIO_PD2;
 	}
 }
 
@@ -1010,6 +1138,8 @@ static void __init tegra_enterprise_init(void)
 	enterprise_i2c_init();
 	enterprise_uart_init();
 	enterprise_usb_init();
+	if (board_info.board_id == BOARD_E1239)
+		enterprise_bt_rfkill_pdata[0].reset_gpio = TEGRA_GPIO_PF4;
 	platform_add_devices(enterprise_devices, ARRAY_SIZE(enterprise_devices));
 	tegra_ram_console_debug_init();
 	enterprise_regulator_init();
@@ -1024,6 +1154,10 @@ static void __init tegra_enterprise_init(void)
 	enterprise_audio_init();
 	enterprise_baseband_init();
 	enterprise_panel_init();
+	if (tegra_get_commchip_id() == COMMCHIP_TI_WL18XX)
+		enterprise_bt_st();
+	else
+		enterprise_bt_rfkill();
 	enterprise_setup_bluesleep();
 	enterprise_emc_init();
 	enterprise_sensors_init();
@@ -1043,6 +1177,11 @@ static void __init tegra_enterprise_reserve(void)
 	tegra_ram_console_debug_reserve(SZ_1M);
 }
 
+static const char *enterprise_dt_board_compat[] = {
+	"nvidia,enterprise",
+	NULL
+};
+
 MACHINE_START(TEGRA_ENTERPRISE, "tegra_enterprise")
 	.boot_params    = 0x80000100,
 	.map_io         = tegra_map_common_io,
@@ -1051,4 +1190,5 @@ MACHINE_START(TEGRA_ENTERPRISE, "tegra_enterprise")
 	.init_irq       = tegra_init_irq,
 	.timer          = &tegra_timer,
 	.init_machine   = tegra_enterprise_init,
+	.dt_compat	= enterprise_dt_board_compat,
 MACHINE_END

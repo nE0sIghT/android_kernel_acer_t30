@@ -1,7 +1,7 @@
 /*
  * arch/arm/mach-tegra/tegra3_speedo.c
  *
- * Copyright (c) 2011-2012, NVIDIA Corporation. All rights reserved.
+ * Copyright (c) 2011-2013, NVIDIA Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -198,6 +198,7 @@ static void rev_sku_to_speedo_ids(int rev, int sku)
 			break;
 
 		case 0x81: /* T30 */
+		case 0xb1:
 			switch (package_id) {
 			case 1: /* MID => T30 */
 				cpu_speedo_id = 2;
@@ -245,9 +246,16 @@ static void rev_sku_to_speedo_ids(int rev, int sku)
 				threshold_index = 10;
 				break;
 			case 2: /* DSC => T30S */
+#ifdef CONFIG_TEGRA_CPU_OVERCLOCK
+			/* fake it to behave as AP33 variant */
+				cpu_speedo_id = 4;
+				soc_speedo_id = 1;
+				threshold_index = 7;
+#else
 				cpu_speedo_id = 3;
 				soc_speedo_id = 2;
 				threshold_index = 3;
+#endif
 				break;
 			default:
 				pr_err("Tegra3 Rev-A02: Reserved pkg: %d\n",
@@ -303,7 +311,6 @@ static void rev_sku_to_speedo_ids(int rev, int sku)
 
 		case 0x91: /* T30AGS-Ax */
 		case 0xb0: /* T30IQS-Ax */
-		case 0xb1: /* T30MQS-Ax */
 		case 0x90: /* T30AQS-Ax */
 			soc_speedo_id = 3;
 			threshold_index = 12;
@@ -436,7 +443,11 @@ void tegra_init_speedo_data(void)
 			break;
 		}
 	}
+#ifdef CONFIG_TEGRA_CPU_OVERCLOCK
+	cpu_process_id = 3; /* fake it to behave as AP33 cpu variant 3 */
+#else
 	cpu_process_id = iv -1;
+#endif
 
 	if (cpu_process_id == -1) {
 		pr_err("****************************************************");
@@ -456,7 +467,11 @@ void tegra_init_speedo_data(void)
 			break;
 		}
 	}
+#ifdef CONFIG_TEGRA_CPU_OVERCLOCK
+	core_process_id = 1; /* fake it to behave as AP33 core variant 1 */
+#else
 	core_process_id = iv -1;
+#endif
 
 	if (core_process_id == -1) {
 		pr_err("****************************************************");
@@ -473,7 +488,6 @@ void tegra_init_speedo_data(void)
 		if (cpu_process_id <= 2) {
 			switch(fuse_sku) {
 			case 0xb0:
-			case 0xb1:
 				cpu_speedo_id = 9;
 				break;
 			case 0x90:
@@ -485,7 +499,6 @@ void tegra_init_speedo_data(void)
 		} else if (cpu_process_id >= 3 && cpu_process_id < 6) {
 			switch(fuse_sku) {
 			case 0xb0:
-			case 0xb1:
 				cpu_speedo_id = 10;
 				break;
 			case 0x90:

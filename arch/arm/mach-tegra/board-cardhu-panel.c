@@ -678,7 +678,11 @@ static struct tegra_fb_data cardhu_fb_data = {
 	.win		= 0,
 	.xres		= 1366,
 	.yres		= 768,
+#ifdef CONFIG_TEGRA_DC_USE_HW_BPP
+	.bits_per_pixel = -1,
+#else
 	.bits_per_pixel	= 32,
+#endif
 	.flags		= TEGRA_FB_FLIP_ON_PROBE,
 };
 
@@ -686,7 +690,11 @@ static struct tegra_fb_data cardhu_hdmi_fb_data = {
 	.win		= 0,
 	.xres		= 640,
 	.yres		= 480,
+#ifdef CONFIG_TEGRA_DC_USE_HW_BPP
+	.bits_per_pixel = -1,
+#else
 	.bits_per_pixel	= 32,
+#endif
 	.flags		= TEGRA_FB_FLIP_ON_PROBE,
 };
 
@@ -873,13 +881,9 @@ static int cardhu_dsi_panel_disable(void)
 	} else if (is_panel_218) {
 		gpio_free(cardhu_dsi_pnl_reset);
 	} else if (is_panel_1506) {
-		tegra_gpio_disable(e1506_bl_enb);
 		gpio_free(e1506_bl_enb);
-		tegra_gpio_disable(cardhu_dsi_pnl_reset);
 		gpio_free(cardhu_dsi_pnl_reset);
-		tegra_gpio_disable(e1506_panel_enb);
 		gpio_free(e1506_panel_enb);
-		tegra_gpio_disable(e1506_dsi_vddio);
 		gpio_free(e1506_dsi_vddio);
 	}
 	return err;
@@ -1250,8 +1254,8 @@ static void cardhu_panel_preinit(void)
 		cardhu_disp1_out.enable = cardhu_panel_enable;
 		cardhu_disp1_out.disable = cardhu_panel_disable;
 		/* Set height and width in mm. */
-		cardhu_disp1_out.height = 127;
-		cardhu_disp1_out.width = 216;
+		cardhu_disp1_out.height = 125;
+		cardhu_disp1_out.width = 223;
 
 		cardhu_disp1_pdata.fb = &cardhu_fb_data;
 	} else {
@@ -1273,12 +1277,18 @@ static void cardhu_panel_preinit(void)
 				ARRAY_SIZE(cardhu_dsi_modes_218);
 			cardhu_dsi_fb_data.xres = 864;
 			cardhu_dsi_fb_data.yres = 480;
+			/* Set height and width in mm. */
+			cardhu_disp1_out.height = 47;
+			cardhu_disp1_out.width = 84;
 		} else if (is_panel_219) {
 			cardhu_disp1_out.modes	= cardhu_dsi_modes_219;
 			cardhu_disp1_out.n_modes =
 				ARRAY_SIZE(cardhu_dsi_modes_219);
 			cardhu_dsi_fb_data.xres = 540;
 			cardhu_dsi_fb_data.yres = 960;
+			/* Set height and width in mm. */
+			cardhu_disp1_out.height = 95;
+			cardhu_disp1_out.width = 53;
 		} else if (is_panel_1506) {
 			cardhu_disp1_out.modes	= cardhu_dsi_modes_1506;
 			cardhu_disp1_out.n_modes =
@@ -1344,8 +1354,8 @@ int __init cardhu_panel_init(void)
 		cardhu_disp1_out.depth = 24;
 #endif
 		/* Set height and width in mm. */
-		cardhu_disp1_out.height = 127;
-		cardhu_disp1_out.width = 203;
+		cardhu_disp1_out.height = 135;
+		cardhu_disp1_out.width = 217;
 		cardhu_fb_data.xres = 1920;
 		cardhu_fb_data.yres = 1200;
 
@@ -1394,7 +1404,6 @@ skip_lvds:
 	gpio_direction_input(cardhu_hdmi_hpd);
 
 #if !(DC_CTRL_MODE & TEGRA_DC_OUT_ONE_SHOT_MODE)
-	tegra_gpio_enable(e1506_lcd_te);
 	gpio_request(e1506_lcd_te, "lcd_te");
 	gpio_direction_input(e1506_lcd_te);
 #endif
@@ -1435,9 +1444,16 @@ skip_lvds:
 	res->start = tegra_fb2_start;
 	res->end = tegra_fb2_start + tegra_fb2_size - 1;
 
-	/* Copy the bootloader fb to the fb2. */
-	tegra_move_framebuffer(tegra_fb2_start, tegra_bootloader_fb_start,
-				min(tegra_fb2_size, tegra_bootloader_fb_size));
+	/*
+	 * If the bootloader fb2 is valid, copy it to the fb2, or else
+	 * clear fb2 to avoid garbage on dispaly2.
+	 */
+	if (tegra_bootloader_fb2_size)
+		tegra_move_framebuffer(tegra_fb2_start,
+			tegra_bootloader_fb2_start,
+			min(tegra_fb2_size, tegra_bootloader_fb2_size));
+	else
+		tegra_clear_framebuffer(tegra_fb2_start, tegra_fb2_size);
 
 	if (!err)
 		err = nvhost_device_register(&cardhu_disp2_device);

@@ -1,7 +1,7 @@
 /*
  * arch/arm/mach-tegra/board-cardhu-sensors.c
  *
- * Copyright (c) 2010-2012, NVIDIA CORPORATION, All rights reserved.
+ * Copyright (c) 2010-2013, NVIDIA CORPORATION, All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -37,6 +37,8 @@
 #include <linux/i2c/pca954x.h>
 #include <linux/i2c/pca953x.h>
 #include <linux/nct1008.h>
+#include <linux/module.h>
+
 #include <mach/fb.h>
 #include <mach/gpio.h>
 #include <media/ov5650.h>
@@ -44,6 +46,8 @@
 #include <media/ov14810.h>
 #include <media/ov2710.h>
 #include <media/tps61050.h>
+#include <media/soc_camera.h>
+#include <media/tegra_v4l2_camera.h>
 #include <generated/mach-types.h>
 #include "gpio-names.h"
 #include "board.h"
@@ -60,12 +64,17 @@
 #include "board-cardhu.h"
 #include "cpu-tegra.h"
 
-static struct regulator *cardhu_1v8_cam1 = NULL;
-static struct regulator *cardhu_1v8_cam2 = NULL;
-static struct regulator *cardhu_1v8_cam3 = NULL;
-static struct regulator *cardhu_vdd_2v8_cam1 = NULL;
-static struct regulator *cardhu_vdd_2v8_cam2 = NULL;
-static struct regulator *cardhu_vdd_cam3 = NULL;
+#if defined(CONFIG_VIDEO_OV5650) || \
+	defined(CONFIG_VIDEO_OV5650_MODULE) || \
+	defined(CONFIG_SOC_CAMERA_OV5650) || \
+	defined(CONFIG_SOC_CAMERA_OV5650_MODULE)
+static struct regulator *cardhu_1v8_cam1;
+static struct regulator *cardhu_vdd_2v8_cam1;
+#endif
+static struct regulator *cardhu_1v8_cam2;
+static struct regulator *cardhu_1v8_cam3;
+static struct regulator *cardhu_vdd_2v8_cam2;
+static struct regulator *cardhu_vdd_cam3;
 
 static struct board_info board_info;
 
@@ -81,6 +90,97 @@ static struct pca954x_platform_data cardhu_pca954x_data = {
 	.num_modes      = ARRAY_SIZE(cardhu_pca954x_modes),
 };
 
+#if defined(CONFIG_SOC_CAMERA_OV5640) \
+	|| defined(CONFIG_SOC_CAMERA_OV5640_MODULE)
+static int cardhu_ov5640_power_on(void);
+static int cardhu_ov5640_power_off(void);
+
+static int cardhu_ov5640_power(struct device *dev, int enable)
+{
+	if (enable)
+		return cardhu_ov5640_power_on();
+	else
+		cardhu_ov5640_power_off();
+
+	return 0;
+}
+
+static struct i2c_board_info cardhu_ov5640_camera_i2c_device = {
+	I2C_BOARD_INFO("ov5640", 0x3C),
+};
+
+static struct tegra_camera_platform_data cardhu_ov5640_camera_platform_data = {
+	.flip_v			= 0,
+	.flip_h			= 0,
+	.port			= TEGRA_CAMERA_PORT_CSI_B,
+	.lanes			= 2,
+	.continuous_clk		= 0,
+};
+
+static struct soc_camera_link ov5640_iclink = {
+	.bus_id		= -1, /* This must match the .id of tegra_vi01_device */
+	.board_info	= &cardhu_ov5640_camera_i2c_device,
+	.module_name	= "ov5640",
+	.i2c_adapter_id	= PCA954x_I2C_BUS2,
+	.power		= cardhu_ov5640_power,
+	.priv		= &cardhu_ov5640_camera_platform_data,
+};
+
+static struct platform_device cardhu_ov5640_soc_camera_device = {
+	.name	= "soc-camera-pdrv",
+	.id	= 1,
+	.dev	= {
+		.platform_data = &ov5640_iclink,
+	},
+};
+#endif
+
+/* OV5650 V4L2 device */
+#if defined(CONFIG_SOC_CAMERA_OV5650) \
+	|| defined(CONFIG_SOC_CAMERA_OV5650_MODULE)
+static int cardhu_left_ov5650_power_on(void);
+static int cardhu_left_ov5650_power_off(void);
+
+static int cardhu_ov5650_power(struct device *dev, int enable)
+{
+	if (enable)
+		return cardhu_left_ov5650_power_on();
+	else
+		cardhu_left_ov5650_power_off();
+
+	return 0;
+}
+
+static struct i2c_board_info cardhu_ov5650_camera_i2c_device = {
+		I2C_BOARD_INFO("ov5650", 0x36),
+};
+
+static struct tegra_camera_platform_data cardhu_ov5650_camera_platform_data = {
+	.flip_v			= 0,
+	.flip_h			= 0,
+	.port			= TEGRA_CAMERA_PORT_CSI_A,
+	.lanes			= 2,
+	.continuous_clk		= 1,
+};
+
+static struct soc_camera_link ov5650_iclink = {
+	.bus_id		= -1, /* This must match the .id of tegra_vi01_device */
+	.board_info	= &cardhu_ov5650_camera_i2c_device,
+	.module_name	= "ov5650",
+	.i2c_adapter_id	= PCA954x_I2C_BUS0,
+	.power		= cardhu_ov5650_power,
+	.priv		= &cardhu_ov5650_camera_platform_data,
+};
+
+static struct platform_device cardhu_ov5650_soc_camera_device = {
+	.name	= "soc-camera-pdrv",
+	.id	= 0,
+	.dev	= {
+		.platform_data = &ov5650_iclink,
+	},
+};
+#endif
+
 static int cardhu_camera_init(void)
 {
 	int ret;
@@ -88,7 +188,8 @@ static int cardhu_camera_init(void)
 	/* Boards E1198 and E1291 are of Cardhu personality
 	 * and donot have TCA6416 exp for camera */
 	if ((board_info.board_id == BOARD_E1198) ||
-		(board_info.board_id == BOARD_E1291)) {
+		(board_info.board_id == BOARD_E1291) ||
+		(board_info.board_id == BOARD_PM315)) {
 		ret = gpio_request(CAM1_POWER_DWN_GPIO, "camera_power_en");
 		if (ret < 0)
 			pr_err("%s: gpio_request failed for gpio %s\n",
@@ -132,12 +233,17 @@ static int cardhu_camera_init(void)
 	return 0;
 }
 
+#if defined(CONFIG_VIDEO_OV5650) || \
+	defined(CONFIG_VIDEO_OV5650_MODULE) || \
+	defined(CONFIG_SOC_CAMERA_OV5650) || \
+	defined(CONFIG_SOC_CAMERA_OV5650_MODULE)
 static int cardhu_left_ov5650_power_on(void)
 {
 	/* Boards E1198 and E1291 are of Cardhu personality
 	 * and donot have TCA6416 exp for camera */
 	if ((board_info.board_id == BOARD_E1198) ||
-		(board_info.board_id == BOARD_E1291)) {
+		(board_info.board_id == BOARD_E1291) ||
+		(board_info.board_id == BOARD_PM315)) {
 
 		if (cardhu_vdd_2v8_cam1 == NULL) {
 			cardhu_vdd_2v8_cam1 = regulator_get(NULL, "vdd_2v8_cam1");
@@ -164,7 +270,8 @@ static int cardhu_left_ov5650_power_on(void)
 
 	mdelay(5);
 	if ((board_info.board_id == BOARD_E1198) ||
-		(board_info.board_id == BOARD_E1291)) {
+		(board_info.board_id == BOARD_E1291) ||
+		(board_info.board_id == BOARD_PM315)) {
 		gpio_direction_output(CAM1_POWER_DWN_GPIO, 0);
 		mdelay(20);
 		gpio_direction_output(OV5650_RESETN_GPIO, 0);
@@ -199,7 +306,8 @@ static int cardhu_left_ov5650_power_off(void)
 	/* Boards E1198 and E1291 are of Cardhu personality
 	 * and donot have TCA6416 exp for camera */
 	if ((board_info.board_id == BOARD_E1198) ||
-		(board_info.board_id == BOARD_E1291)) {
+		(board_info.board_id == BOARD_E1291) ||
+		(board_info.board_id == BOARD_PM315)) {
 		gpio_direction_output(CAM1_POWER_DWN_GPIO, 1);
 		gpio_direction_output(CAM2_POWER_DWN_GPIO, 1);
 		gpio_direction_output(CAM3_POWER_DWN_GPIO, 1);
@@ -211,11 +319,14 @@ static int cardhu_left_ov5650_power_off(void)
 
 	return 0;
 }
+#endif
 
+#if defined(CONFIG_VIDEO_OV5650) || defined(CONFIG_VIDEO_OV5650_MODULE)
 struct ov5650_platform_data cardhu_left_ov5650_data = {
 	.power_on = cardhu_left_ov5650_power_on,
 	.power_off = cardhu_left_ov5650_power_off,
 };
+#endif
 
 #ifdef CONFIG_VIDEO_OV14810
 static int cardhu_ov14810_power_on(void)
@@ -281,7 +392,8 @@ static int cardhu_right_ov5650_power_on(void)
 	/* Boards E1198 and E1291 are of Cardhu personality
 	 * and donot have TCA6416 exp for camera */
 	if ((board_info.board_id == BOARD_E1198) ||
-		(board_info.board_id == BOARD_E1291)) {
+		(board_info.board_id == BOARD_E1291) ||
+		(board_info.board_id == BOARD_PM315)) {
 
 		gpio_direction_output(CAM1_POWER_DWN_GPIO, 0);
 		gpio_direction_output(CAM2_POWER_DWN_GPIO, 0);
@@ -340,9 +452,10 @@ static int cardhu_right_ov5650_power_off(void)
 	gpio_direction_output(CAMERA_CSI_MUX_SEL_GPIO, 0);
 
 	/* Boards E1198 and E1291 are of Cardhu personality
-	 * and donot have TCA6416 exp for camera */
+	 * and do not have TCA6416 for camera */
 	if ((board_info.board_id == BOARD_E1198) ||
-		(board_info.board_id == BOARD_E1291)) {
+		(board_info.board_id == BOARD_E1291) ||
+		(board_info.board_id == BOARD_PM315)) {
 		gpio_direction_output(CAM1_POWER_DWN_GPIO, 1);
 		gpio_direction_output(CAM2_POWER_DWN_GPIO, 1);
 		gpio_direction_output(CAM3_POWER_DWN_GPIO, 1);
@@ -363,8 +476,8 @@ static void cardhu_ov5650_synchronize_sensors(void)
 		mdelay(50);
 		gpio_direction_output(CAM1_POWER_DWN_GPIO, 0);
 		mdelay(50);
-	}
-	else if (board_info.board_id == BOARD_E1291) {
+	} else if ((board_info.board_id == BOARD_E1291) ||
+			(board_info.board_id == BOARD_PM315)) {
 		gpio_direction_output(CAM1_POWER_DWN_GPIO, 1);
 		gpio_direction_output(CAM2_POWER_DWN_GPIO, 1);
 		mdelay(50);
@@ -387,27 +500,6 @@ static int cardhu_ov2710_power_on(void)
 	/* CSI-B and front sensor are muxed on cardhu */
 	gpio_direction_output(CAMERA_CSI_MUX_SEL_GPIO, 1);
 
-	/* Boards E1198 and E1291 are of Cardhu personality
-	 * and donot have TCA6416 exp for camera */
-	if ((board_info.board_id == BOARD_E1198) ||
-		(board_info.board_id == BOARD_E1291)) {
-
-		gpio_direction_output(CAM1_POWER_DWN_GPIO, 0);
-		gpio_direction_output(CAM2_POWER_DWN_GPIO, 0);
-		gpio_direction_output(CAM3_POWER_DWN_GPIO, 0);
-		mdelay(10);
-
-		if (cardhu_vdd_cam3 == NULL) {
-			cardhu_vdd_cam3 = regulator_get(NULL, "vdd_cam3");
-			if (WARN_ON(IS_ERR(cardhu_vdd_cam3))) {
-				pr_err("%s: couldn't get regulator vdd_cam3: %ld\n",
-					__func__, PTR_ERR(cardhu_vdd_cam3));
-				goto reg_alloc_fail;
-			}
-		}
-		regulator_enable(cardhu_vdd_cam3);
-	}
-
 	/* Enable VDD_1V8_Cam3 */
 	if (cardhu_1v8_cam3 == NULL) {
 		cardhu_1v8_cam3 = regulator_get(NULL, "vdd_1v8_cam3");
@@ -418,7 +510,32 @@ static int cardhu_ov2710_power_on(void)
 		}
 	}
 	regulator_enable(cardhu_1v8_cam3);
-	mdelay(5);
+
+	/* Boards E1198 and E1291 are of Cardhu personality
+	 * and do not have TCA6416 for camera */
+	if ((board_info.board_id == BOARD_E1198) ||
+		(board_info.board_id == BOARD_E1291) ||
+		(board_info.board_id == BOARD_PM315)) {
+		if (cardhu_vdd_cam3 == NULL) {
+			cardhu_vdd_cam3 = regulator_get(NULL, "vdd_cam3");
+			if (WARN_ON(IS_ERR(cardhu_vdd_cam3))) {
+				pr_err("%s: couldn't get regulator vdd_cam3: %ld\n",
+					__func__, PTR_ERR(cardhu_vdd_cam3));
+				goto reg_alloc_fail;
+			}
+		}
+		regulator_enable(cardhu_vdd_cam3);
+
+		mdelay(5);
+
+		gpio_direction_output(CAM1_POWER_DWN_GPIO, 0);
+		gpio_direction_output(CAM2_POWER_DWN_GPIO, 0);
+		gpio_direction_output(CAM3_POWER_DWN_GPIO, 0);
+		mdelay(10);
+
+	}
+
+	mdelay(20);
 
 	return 0;
 
@@ -443,16 +560,17 @@ static int cardhu_ov2710_power_off(void)
 	/* Boards E1198 and E1291 are of Cardhu personality
 	 * and donot have TCA6416 exp for camera */
 	if ((board_info.board_id == BOARD_E1198) ||
-		(board_info.board_id == BOARD_E1291)) {
+		(board_info.board_id == BOARD_E1291) ||
+		(board_info.board_id == BOARD_PM315)) {
 		gpio_direction_output(CAM1_POWER_DWN_GPIO, 1);
 		gpio_direction_output(CAM2_POWER_DWN_GPIO, 1);
 		gpio_direction_output(CAM3_POWER_DWN_GPIO, 1);
+		if (cardhu_vdd_cam3)
+			regulator_disable(cardhu_vdd_cam3);
 	}
 
 	if (cardhu_1v8_cam3)
 		regulator_disable(cardhu_1v8_cam3);
-	if (cardhu_vdd_cam3)
-		regulator_disable(cardhu_vdd_cam3);
 
 	return 0;
 }
@@ -470,9 +588,9 @@ static int cardhu_ov5640_power_on(void)
 	/* Boards E1198 and E1291 are of Cardhu personality
 	 * and donot have TCA6416 exp for camera */
 	if ((board_info.board_id == BOARD_E1198) ||
-		(board_info.board_id == BOARD_E1291)) {
+		(board_info.board_id == BOARD_E1291) ||
+		(board_info.board_id == BOARD_PM315)) {
 
-		gpio_direction_output(CAM1_POWER_DWN_GPIO, 0);
 		gpio_direction_output(CAM2_POWER_DWN_GPIO, 0);
 		gpio_direction_output(CAM3_POWER_DWN_GPIO, 0);
 		mdelay(10);
@@ -523,8 +641,8 @@ static int cardhu_ov5640_power_off(void)
 	/* Boards E1198 and E1291 are of Cardhu personality
 	 * and donot have TCA6416 exp for camera */
 	if ((board_info.board_id == BOARD_E1198) ||
-		(board_info.board_id == BOARD_E1291)) {
-		gpio_direction_output(CAM1_POWER_DWN_GPIO, 1);
+		(board_info.board_id == BOARD_E1291) ||
+		(board_info.board_id == BOARD_PM315)) {
 		gpio_direction_output(CAM2_POWER_DWN_GPIO, 1);
 		gpio_direction_output(CAM3_POWER_DWN_GPIO, 1);
 	}
@@ -665,10 +783,12 @@ static const struct i2c_board_info cardhu_i2c_board_info_tps61050[] = {
 };
 
 static struct i2c_board_info cardhu_i2c6_board_info[] = {
+#if defined(CONFIG_VIDEO_OV5650) || defined(CONFIG_VIDEO_OV5650_MODULE)
 	{
 		I2C_BOARD_INFO("ov5650L", 0x36),
 		.platform_data = &cardhu_left_ov5650_data,
 	},
+#endif
 	{
 		I2C_BOARD_INFO("sh532u", 0x72),
 		.platform_data = &sh532u_left_pdata,
@@ -680,10 +800,12 @@ static struct i2c_board_info cardhu_i2c6_board_info[] = {
 };
 
 static struct i2c_board_info cardhu_i2c7_board_info[] = {
+#if defined(CONFIG_VIDEO_OV5650) || defined(CONFIG_VIDEO_OV5650_MODULE)
 	{
 		I2C_BOARD_INFO("ov5650R", 0x36),
 		.platform_data = &cardhu_right_ov5650_data,
 	},
+#endif
 	{
 		I2C_BOARD_INFO("sh532u", 0x72),
 		.platform_data = &sh532u_right_pdata,
@@ -695,10 +817,12 @@ static struct i2c_board_info cardhu_i2c7_board_info[] = {
 };
 
 static struct i2c_board_info pm269_i2c6_board_info[] = {
+#if defined(CONFIG_VIDEO_OV5650) || defined(CONFIG_VIDEO_OV5650_MODULE)
 	{
 		I2C_BOARD_INFO("ov5650L", 0x36),
 		.platform_data = &cardhu_left_ov5650_data,
 	},
+#endif
 	{
 		I2C_BOARD_INFO("sh532u", 0x72),
 		.platform_data = &pm269_sh532u_left_pdata,
@@ -710,10 +834,12 @@ static struct i2c_board_info pm269_i2c6_board_info[] = {
 };
 
 static struct i2c_board_info pm269_i2c7_board_info[] = {
+#if defined(CONFIG_VIDEO_OV5650) || defined(CONFIG_VIDEO_OV5650_MODULE)
 	{
 		I2C_BOARD_INFO("ov5650R", 0x36),
 		.platform_data = &cardhu_right_ov5650_data,
 	},
+#endif
 	{
 		I2C_BOARD_INFO("sh532u", 0x72),
 		.platform_data = &pm269_sh532u_right_pdata,
@@ -729,10 +855,12 @@ static struct i2c_board_info cardhu_i2c8_board_info[] = {
 		I2C_BOARD_INFO("ov2710", 0x36),
 		.platform_data = &cardhu_ov2710_data,
 	},
+#if defined(CONFIG_VIDEO_OV5640) || defined(CONFIG_VIDEO_OV5640_MODULE)
 	{
 		I2C_BOARD_INFO("ov5640", 0x3C),
 		.platform_data = &cardhu_ov5640_data,
 	},
+#endif
 };
 
 static int nct_get_temp(void *_data, long *temp)
@@ -855,7 +983,8 @@ static int cardhu_nct1008_init(void)
 		(board_info.board_id == BOARD_E1257) ||
 		(board_info.board_id == BOARD_PM269) ||
 		(board_info.board_id == BOARD_PM305) ||
-		(board_info.board_id == BOARD_PM311)) {
+		(board_info.board_id == BOARD_PM311) ||
+		(board_info.board_id == BOARD_PM315)) {
 		nct1008_port = TEGRA_GPIO_PCC2;
 	} else if ((board_info.board_id == BOARD_E1186) ||
 		(board_info.board_id == BOARD_E1187) ||
@@ -906,7 +1035,8 @@ static const struct i2c_board_info cardhu_i2c2_board_info_tca6416[] = {
 static int __init pmu_tca6416_init(void)
 {
 	if ((board_info.board_id == BOARD_E1198) ||
-		(board_info.board_id == BOARD_E1291))
+		(board_info.board_id == BOARD_E1291) ||
+			(board_info.board_id == BOARD_PM315))
 			return 0;
 
 	pr_info("Registering pmu pca6416\n");
@@ -920,7 +1050,8 @@ static int __init cam_tca6416_init(void)
 	/* Boards E1198 and E1291 are of Cardhu personality
 	 * and donot have TCA6416 exp for camera */
 	if ((board_info.board_id == BOARD_E1198) ||
-		(board_info.board_id == BOARD_E1291))
+			(board_info.board_id == BOARD_E1291) ||
+			(board_info.board_id == BOARD_PM315))
 		return 0;
 
 	pr_info("Registering cam pca6416\n");
@@ -1059,11 +1190,13 @@ int __init cardhu_sensors_init(void)
 	cardhu_camera_init();
 	cam_tca6416_init();
 
-	i2c_register_board_info(2, cardhu_i2c3_board_info,
-		ARRAY_SIZE(cardhu_i2c3_board_info));
+	if (board_info.board_id != BOARD_PM315) {
+		i2c_register_board_info(2, cardhu_i2c3_board_info,
+			ARRAY_SIZE(cardhu_i2c3_board_info));
 
-	i2c_register_board_info(2, cardhu_i2c_board_info_tps61050,
-		ARRAY_SIZE(cardhu_i2c_board_info_tps61050));
+		i2c_register_board_info(2, cardhu_i2c_board_info_tps61050,
+			ARRAY_SIZE(cardhu_i2c_board_info_tps61050));
+	}
 
 #ifdef CONFIG_VIDEO_OV14810
 	/* This is disabled by default; To enable this change Kconfig;
@@ -1106,7 +1239,7 @@ int __init cardhu_sensors_init(void)
 	if (board_info.sku == BOARD_SKU_B11)
 		i2c_register_board_info(2, cardhu_i2c2_ltr_board_info,
 			ARRAY_SIZE(cardhu_i2c2_ltr_board_info));
-	else
+	else if (board_info.board_id != BOARD_PM315)
 		i2c_register_board_info(2, cardhu_i2c2_isl_board_info,
 			ARRAY_SIZE(cardhu_i2c2_isl_board_info));
 
@@ -1117,11 +1250,23 @@ int __init cardhu_sensors_init(void)
 	i2c_register_board_info(4, cardhu_i2c4_nct1008_board_info,
 		ARRAY_SIZE(cardhu_i2c4_nct1008_board_info));
 
-	mpuirq_init();
+	if (board_info.board_id != BOARD_PM315)
+		mpuirq_init();
+
+#if defined(CONFIG_SOC_CAMERA_OV5650) \
+	|| defined(CONFIG_SOC_CAMERA_OV5650_MODULE)
+	platform_device_register(&cardhu_ov5650_soc_camera_device);
+#endif
+#if defined(CONFIG_SOC_CAMERA_OV5640) \
+	|| defined(CONFIG_SOC_CAMERA_OV5640_MODULE)
+	platform_device_register(&cardhu_ov5640_soc_camera_device);
+#endif
+
 	return 0;
 }
 
 #if defined(CONFIG_GPIO_PCA953X)
+#if defined(CONFIG_VIDEO_OV5650) || defined(CONFIG_VIDEO_OV5650_MODULE)
 struct ov5650_gpios {
 	const char *name;
 	int gpio;
@@ -1162,19 +1307,20 @@ int __init cardhu_ov5650_late_init(void)
 		return 0;
 
 	if ((board_info.board_id == BOARD_E1198) ||
-		(board_info.board_id == BOARD_E1291))
+		(board_info.board_id == BOARD_E1291) ||
+		(board_info.board_id == BOARD_PM315))
 		return 0;
 
-	printk("%s: \n", __func__);
+	printk(KERN_INFO "%s:\n", __func__);
 	for (i = 0; i < ARRAY_SIZE(ov5650_gpio_keys); i++) {
 		ret = gpio_request(ov5650_gpio_keys[i].gpio,
 			ov5650_gpio_keys[i].name);
 		if (ret < 0) {
-			printk("%s: gpio_request failed for gpio #%d\n",
+			printk(KERN_INFO "%s: gpio_request failed for gpio #%d\n",
 				__func__, i);
 			goto fail;
 		}
-		printk("%s: enable - %d\n", __func__, i);
+		printk(KERN_INFO "%s: enable - %d\n", __func__, i);
 		gpio_direction_output(ov5650_gpio_keys[i].gpio,
 			ov5650_gpio_keys[i].enabled);
 		gpio_export(ov5650_gpio_keys[i].gpio, false);
@@ -1189,4 +1335,5 @@ fail:
 }
 
 late_initcall(cardhu_ov5650_late_init);
+#endif
 #endif

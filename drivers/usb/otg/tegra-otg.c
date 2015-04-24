@@ -59,6 +59,7 @@ struct tegra_otg_data {
 	struct otg_transceiver otg;
 	unsigned long int_status;
 	spinlock_t lock;
+	struct mutex irq_work_mutex;
 	void __iomem *regs;
 	struct clk *clk;
 	int irq;
@@ -68,7 +69,7 @@ struct tegra_otg_data {
 	bool clk_enabled;
 	bool interrupt_mode;
 	bool builtin_host;
-	bool suspended
+	bool suspended;
 };
 
 static struct tegra_otg_data *tegra_clone;
@@ -180,8 +181,6 @@ static void tegra_stop_host(struct tegra_otg_data *tegra)
 #endif
 	if (pdev) {
 		/* unregister host from otg */
-		kfree(pdev->dev.platform_data);
-		pdev->dev.platform_data = NULL;
 		platform_device_unregister(pdev);
 		tegra->pdev = NULL;
 	}
@@ -261,16 +260,19 @@ static void irq_work(struct work_struct *work)
 	struct tegra_otg_data *tegra =
 		container_of(work, struct tegra_otg_data, work);
 	struct otg_transceiver *otg = &tegra->otg;
-	enum usb_otg_state from = otg->state;
+	enum usb_otg_state from;
 	enum usb_otg_state to = OTG_STATE_UNDEFINED;
 	unsigned long flags;
 	unsigned long status;
 
+	mutex_lock(&tegra->irq_work_mutex);
+
 	spin_lock_irqsave(&tegra->lock, flags);
+	from = otg->state;
 	status = tegra->int_status;
 
 	/* Debug prints */
-	DBG("%s(%d) status = 0x%x\n", __func__, __LINE__, status);
+	DBG("%s(%d) status = 0x%lx\n", __func__, __LINE__, status);
 	if ((status & USB_ID_INT_STATUS) &&
 			(status & USB_VBUS_INT_STATUS))
 		DBG("%s(%d) got vbus & id interrupt\n", __func__, __LINE__);
@@ -290,6 +292,7 @@ static void irq_work(struct work_struct *work)
 
 	spin_unlock_irqrestore(&tegra->lock, flags);
 	tegra_change_otg_state(tegra, to);
+	mutex_unlock(&tegra->irq_work_mutex);
 }
 
 static irqreturn_t tegra_otg_irq(int irq, void *data)
@@ -300,10 +303,10 @@ static irqreturn_t tegra_otg_irq(int irq, void *data)
 
 	spin_lock_irqsave(&tegra->lock, flags);
 	val = otg_readl(tegra, USB_PHY_WAKEUP);
-	DBG("%s(%d) interrupt val = 0x%x\n", __func__, __LINE__, val);
+	DBG("%s(%d) interrupt val = 0x%lx\n", __func__, __LINE__, val);
 
 	if (val & (USB_VBUS_INT_EN | USB_ID_INT_EN)) {
-		DBG("%s(%d) PHY_WAKEUP = 0x%x\n", __func__, __LINE__, val);
+		DBG("%s(%d) PHY_WAKEUP = 0x%lx\n", __func__, __LINE__, val);
 		otg_writel(tegra, val, USB_PHY_WAKEUP);
 		if ((val & USB_ID_INT_STATUS) || (val & USB_VBUS_INT_STATUS)) {
 			tegra->int_status = val;
@@ -395,7 +398,7 @@ static ssize_t store_host_en(struct device *dev, struct device_attribute *attr,
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct tegra_otg_data *tegra = platform_get_drvdata(pdev);
-	unsigned long host;
+	unsigned int host;
 
 	if (sscanf(buf, "%d", &host) != 1 || host < 0 || host > 1)
 		return -EINVAL;
@@ -438,6 +441,8 @@ static int tegra_otg_probe(struct platform_device *pdev)
 #if defined(CONFIG_ARCH_ACER_T30)
 	wake_lock_init(&usb_wake_lock, WAKE_LOCK_SUSPEND, "tegra-otg");
 #endif
+	mutex_init(&tegra->irq_work_mutex);
+
 	if (pdata) {
 		tegra->builtin_host = !pdata->ehci_pdata->builtin_host_disabled;
 	}
@@ -494,12 +499,14 @@ static int tegra_otg_probe(struct platform_device *pdev)
 		goto err_irq;
 	}
 
-	err = enable_irq_wake(tegra->irq);
-	if (err < 0) {
-		dev_warn(&pdev->dev,
-			"Couldn't enable USB otg mode wakeup, irq=%d, error=%d\n",
-			tegra->irq, err);
-		err = 0;
+	if (pdata->ehci_pdata->u_data.host.remote_wakeup_supported) {
+		err = enable_irq_wake(tegra->irq);
+		if (err < 0) {
+			dev_warn(&pdev->dev,
+				"Couldn't enable USB otg mode wakeup,"
+				" irq=%d, error=%d\n", tegra->irq, err);
+			err = 0;
+		}
 	}
 
 	INIT_WORK(&tegra->work, irq_work);
@@ -540,6 +547,7 @@ static int __exit tegra_otg_remove(struct platform_device *pdev)
 	clk_disable(tegra->clk);
 	clk_put(tegra->clk);
 	platform_set_drvdata(pdev, NULL);
+	mutex_destroy(&tegra->irq_work_mutex);
 	kfree(tegra);
 
 	return 0;
@@ -551,7 +559,11 @@ static int tegra_otg_suspend(struct device *dev)
 	struct platform_device *pdev = to_platform_device(dev);
 	struct tegra_otg_data *tegra = platform_get_drvdata(pdev);
 	struct otg_transceiver *otg = &tegra->otg;
+#if !defined(CONFIG_ARCH_ACER_T30)
 	int val;
+#endif
+
+	mutex_lock(&tegra->irq_work_mutex);
 	DBG("%s(%d) BEGIN state : %s\n", __func__, __LINE__,
 					tegra_state_name(otg->state));
 
@@ -570,6 +582,7 @@ static int tegra_otg_suspend(struct device *dev)
 	tegra->suspended = true;
 
 	DBG("%s(%d) END\n", __func__, __LINE__);
+	mutex_unlock(&tegra->irq_work_mutex);
 	return 0;
 }
 
@@ -581,8 +594,11 @@ static void tegra_otg_resume(struct device *dev)
 	unsigned long flags;
 	DBG("%s(%d) BEGIN\n", __func__, __LINE__);
 
-	if (!tegra->suspended)
+	mutex_lock(&tegra->irq_work_mutex);
+	if (!tegra->suspended) {
+		mutex_unlock(&tegra->irq_work_mutex);
 		return;
+	}
 
 	/* Clear pending interrupts */
 	clk_enable(tegra->clk);
@@ -601,11 +617,12 @@ static void tegra_otg_resume(struct device *dev)
 
 	spin_unlock_irqrestore(&tegra->lock, flags);
 	schedule_work(&tegra->work);
-
 	enable_interrupt(tegra, true);
 
 	tegra->suspended = false;
+
 	DBG("%s(%d) END\n", __func__, __LINE__);
+	mutex_unlock(&tegra->irq_work_mutex);
 }
 
 #if defined(CONFIG_ARCH_ACER_T30)

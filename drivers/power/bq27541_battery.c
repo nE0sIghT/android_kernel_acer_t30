@@ -39,12 +39,11 @@
 #include <linux/wakelock.h>
 #include <linux/mutex.h>
 #include "../../arch/arm/mach-tegra/gpio-names.h"
-#if defined(CONFIG_ARCH_ACER_T30)
+
 #include "../../arch/arm/mach-tegra/board-acer-t30.h"
 extern int acer_board_id;
 extern int acer_board_type;
 extern bool throttle_start;
-#endif
 
 #define RELEASED_DATE			"2012/08/28"
 #define DRIVER_VERSION			"1.7.0"
@@ -124,7 +123,7 @@ int old_rsoc = 0;
 int counter = 0;
 int adapter = 0;
 
-extern tegra3_cpu_temp_query(void);
+extern int tegra3_cpu_temp_query(void);
 
 struct bq27541_access_methods {
 	int (*read)(u8 reg, int *rt_value, int b_single,
@@ -1303,32 +1302,27 @@ static int bq27541_battery_status(struct bq27541_device_info *di)
 	 */
 	cpu_temp = tegra3_cpu_temp_query();
 	if((acer_board_type == BOARD_PICASSO_MF) && gpio_get_value(adapter)){
-		if(throttle_start && (cpu_temp <= 75)){
+		if(throttle_start && (cpu_temp <= 75)) {
 			bq27541_charger_reset();
 			throttle_start = false;
 		}
 	}
 
 	/* Change to FULL at  97% due to capacity mapping. */
-	if(Capacity < 97)
-	{
+	if(Capacity < 97) {
 		if(gpio_get_value(adapter)){
 			status = POWER_SUPPLY_STATUS_CHARGING;
-			if(acer_board_type != BOARD_PICASSO_E2)
-				gpio_direction_output(CHARGING_FULL, 1);
-		}
-		else
+			gpio_direction_output(CHARGING_FULL, 1);
+		} else {
 			status = POWER_SUPPLY_STATUS_DISCHARGING;
-	}
-	else
-	{
-		if(gpio_get_value(adapter)){
-			status = POWER_SUPPLY_STATUS_FULL;
-			if(acer_board_type != BOARD_PICASSO_E2)
-				gpio_direction_output(CHARGING_FULL, 1);
 		}
-		else
+	} else {
+		if(gpio_get_value(adapter)) {
+			status = POWER_SUPPLY_STATUS_FULL;
+			gpio_direction_output(CHARGING_FULL, 1);
+		} else {
 			status = POWER_SUPPLY_STATUS_NOT_CHARGING;
+		}
 	}
 	return status;
 
@@ -1340,27 +1334,23 @@ static int bq27541_battery_present(struct bq27541_device_info *di)
 	int present = 0;
 
 	/* Calculate counter for limitation of 10.5hr charger reset */
-	if(acer_board_type != BOARD_PICASSO_E2){
-		if(counter <= 240){
-			if(gpio_get_value(adapter))
-				counter += 1;
-			else
-				counter = 0;
-		}
-		else{
-			bq27541_charger_reset();
+	if(counter <= 240) {
+		if(gpio_get_value(adapter))
+			counter += 1;
+		else
 			counter = 0;
-		}
+	} else {
+		bq27541_charger_reset();
+		counter = 0;
 	}
 
 	ret = bat_i2c_read(BQ27541_DESIGN_CAPACITY, &present, 0, di);
 	msleep(20);
 	design_capacity = present;
 
-	if (ret >= 0){
+	if (ret >= 0) {
 		return 1;
-	}
-	else {
+	} else {
 		dev_err(di->dev, "No Battery due to error reading design capacity! \n");
 		return 0;
 	}
@@ -1570,19 +1560,17 @@ static int bq27541_battery_probe(struct i2c_client *client,
 
 	mutex_init(&di->lock);
 
-	if(acer_board_type != BOARD_PICASSO_E2){
-		tegra_gpio_enable(CHARGING_FULL);
-		retval = gpio_request(CHARGING_FULL, "full_half_chg");
-		if (retval < 0)
-			printk(KERN_INFO "%s: gpio_request failed for gpio-%d\n",__func__, TEGRA_GPIO_PW5);
-		mdelay(10);
+	tegra_gpio_enable(CHARGING_FULL);
+	retval = gpio_request(CHARGING_FULL, "full_half_chg");
+	if (retval < 0)
+		printk(KERN_INFO "%s: gpio_request failed for gpio-%d\n",__func__, TEGRA_GPIO_PW5);
+	mdelay(10);
 
-		tegra_gpio_enable(CHARGER_STAT);
-		retval = gpio_request(CHARGER_STAT, "chg_stat");
-		if (retval < 0)
-			printk(KERN_INFO "%s: gpio_request failed for gpio-%d\n",__func__, TEGRA_GPIO_PJ2);
-		mdelay(10);
-	}
+	tegra_gpio_enable(CHARGER_STAT);
+	retval = gpio_request(CHARGER_STAT, "chg_stat");
+	if (retval < 0)
+	printk(KERN_INFO "%s: gpio_request failed for gpio-%d\n",__func__, TEGRA_GPIO_PJ2);
+	mdelay(10);
 
 	tegra_gpio_enable(BATT_LEARN);
 	retval = gpio_request(BATT_LEARN, "batt_learn");
@@ -1649,20 +1637,16 @@ static int bq27541_battery_probe(struct i2c_client *client,
 	}
 
 	/* Reset Charger IC due to charging full within 4.5hr limitation */
-	if(acer_board_type != BOARD_PICASSO_E2){
-		if (gpio_get_value(adapter))
-			bq27541_charger_reset();
-	}
+	if (gpio_get_value(adapter))
+		bq27541_charger_reset();
 
 	wake_lock_init(&ac_wake_lock, WAKE_LOCK_SUSPEND, "t30-ac");
 	dev_info(&client->dev, "support ver. %s enabled (%s)\n", DRIVER_VERSION, RELEASED_DATE);
 
-#if defined(CONFIG_ARCH_ACER_T30)
-	if ( (acer_board_type == BOARD_PICASSO_2 || acer_board_type == BOARD_PICASSO_M )
-		&& (acer_board_id == BOARD_EVT || acer_board_id == BOARD_DVT1 || acer_board_id == BOARD_DVT2)) {
+	if (acer_board_type == BOARD_PICASSO_M &&
+		(acer_board_id == BOARD_EVT || acer_board_id == BOARD_DVT1 || acer_board_id == BOARD_DVT2)) {
 		bq27541_disable_hibernate();
 	}
-#endif
 
 	return 0;
 
@@ -1687,10 +1671,8 @@ static int bq27541_battery_remove(struct i2c_client *client)
 
 	free_irq(di->irq, di);
 	cancel_delayed_work_sync(&di->work);
-	if(acer_board_type != BOARD_PICASSO_E2){
-		gpio_free(CHARGING_FULL);
-		gpio_free(CHARGER_STAT);
-	}
+	gpio_free(CHARGING_FULL);
+	gpio_free(CHARGER_STAT);
 	gpio_free(BATT_LEARN);
 	power_supply_unregister(&di->ac);
 	power_supply_unregister(&di->bat);
@@ -1709,7 +1691,7 @@ static int bq27541_battery_suspend(struct i2c_client *client,
 {
 	struct bq27541_device_info *di = i2c_get_clientdata(client);
 	mutex_lock(&di->lock);
-	if(gpio_get_value(adapter) && (acer_board_type != BOARD_PICASSO_E2))
+	if(gpio_get_value(adapter))
 		gpio_direction_output(CHARGING_FULL, 0);
 	del_timer_sync(&di->battery_poll_timer);
 	enable_irq_wake(client->irq);

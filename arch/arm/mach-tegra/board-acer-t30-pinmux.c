@@ -20,11 +20,8 @@
 #include "board.h"
 #include "board-acer-t30.h"
 #include "gpio-names.h"
-#include "pinmux-pe2.c"
 
-extern int acer_board_id;
 extern int acer_board_type;
-extern int acer_sku;
 
 #define DEFAULT_DRIVE(_name)					\
 	{							\
@@ -376,18 +373,9 @@ static __initdata struct tegra_pingroup_config picasso2_pinmux_common[] = {
 	DEFAULT_PINMUX(VI_D11,          RSVD1,           PULL_UP,       NORMAL,     INPUT),
 };
 
-static __initdata struct tegra_pingroup_config cardhu_pinmux_dock_external_pull_up[] = {
-	DEFAULT_PINMUX(GPIO_PBB0,       RSVD1,           NORMAL,    NORMAL,     INPUT),
-	DEFAULT_PINMUX(GPIO_PBB6,       VGP6,            NORMAL,    NORMAL,     INPUT),
-};
-
 static __initdata struct tegra_pingroup_config cardhu_pinmux_dock_internal_pull_up[] = {
 	DEFAULT_PINMUX(GPIO_PBB0,       RSVD1,           NORMAL,    NORMAL,     INPUT),
 	DEFAULT_PINMUX(GPIO_PBB6,       VGP6,            PULL_UP,   NORMAL,     INPUT),
-};
-
-static __initdata struct tegra_pingroup_config cardhu_pinmux_sensor_dvt1[] = {
-	DEFAULT_PINMUX(GMI_AD15,        NAND,            NORMAL,    NORMAL,     OUTPUT), //G
 };
 
 static __initdata struct tegra_pingroup_config cardhu_pinmux_sensor_dvt2[] = {
@@ -443,131 +431,21 @@ int __init cardhu_pinmux_init(void)
 {
 	acer_t30_gpio_init_configure();
 
-        /* common pinmux connfiguration */
-	switch (acer_board_type) {
-	case BOARD_PICASSO_2:
-	case BOARD_PICASSO_M:
-	case BOARD_PICASSO_MF:
-		tegra_pinmux_config_table(picasso2_pinmux_common, ARRAY_SIZE(picasso2_pinmux_common));
-		break;
-	case BOARD_PICASSO_E2:
-		tegra_pinmux_config_table(picasso_E2_pinmux_common, ARRAY_SIZE(picasso_E2_pinmux_common));
-		break;
-	}
+    /* common pinmux connfiguration */
+	tegra_pinmux_config_table(picasso2_pinmux_common, ARRAY_SIZE(picasso2_pinmux_common));
 
-	switch (acer_board_type) {
-	case BOARD_PICASSO_2:
-		switch(acer_board_id) {
-		case BOARD_EVT:
-		case BOARD_DVT1:
-			tegra_pinmux_config_table(cardhu_pinmux_dock_external_pull_up,
-						ARRAY_SIZE(cardhu_pinmux_dock_external_pull_up));
-			tegra_pinmux_config_table(cardhu_pinmux_sensor_dvt1,
-						ARRAY_SIZE(cardhu_pinmux_sensor_dvt1));
-			break;
-		case BOARD_DVT2:
-			tegra_pinmux_config_table(cardhu_pinmux_dock_external_pull_up,
-						ARRAY_SIZE(cardhu_pinmux_dock_external_pull_up));
-			tegra_pinmux_config_table(cardhu_pinmux_sensor_dvt2,
-						ARRAY_SIZE(cardhu_pinmux_sensor_dvt2));
-			break;
-		default:
-			tegra_pinmux_config_table(cardhu_pinmux_dock_internal_pull_up,
-						ARRAY_SIZE(cardhu_pinmux_dock_internal_pull_up));
-			tegra_pinmux_config_table(cardhu_pinmux_sensor_dvt2,
-						ARRAY_SIZE(cardhu_pinmux_sensor_dvt2));
-			break;
-		}
-		break;
-	case BOARD_PICASSO_M:
+	if (acer_board_type == BOARD_PICASSO_M) {
 		tegra_pinmux_config_table(cardhu_pinmux_dock_internal_pull_up,
-					ARRAY_SIZE(cardhu_pinmux_dock_internal_pull_up));
-		tegra_pinmux_config_table(cardhu_pinmux_sensor_dvt2,
-					ARRAY_SIZE(cardhu_pinmux_sensor_dvt2));
-		break;
-	case BOARD_PICASSO_MF:
-		tegra_pinmux_config_table(cardhu_pinmux_sensor_dvt2,
-					ARRAY_SIZE(cardhu_pinmux_sensor_dvt2));
-		break;
-	case BOARD_PICASSO_E2:
-		switch (acer_board_id) {
-		case BOARD_EVT:
-			if (acer_sku == BOARD_SKU_WIFI)
-				tegra_pinmux_config_table(cardhu_pinmux_sensor_dvt1,
-						ARRAY_SIZE(cardhu_pinmux_sensor_dvt1));
-			else
-				tegra_pinmux_config_table(cardhu_pinmux_sensor_dvt2,
-						ARRAY_SIZE(cardhu_pinmux_sensor_dvt2));
-			break;
-		case BOARD_DVT1:
-			tegra_pinmux_config_table(cardhu_pinmux_sensor_dvt2,
-						ARRAY_SIZE(cardhu_pinmux_sensor_dvt2));
-			break;
-		default:
-			tegra_pinmux_config_table(cardhu_pinmux_sensor_dvt2,
-						ARRAY_SIZE(cardhu_pinmux_sensor_dvt2));
-		}
-		break;
+			ARRAY_SIZE(cardhu_pinmux_dock_internal_pull_up));
 	}
+	tegra_pinmux_config_table(cardhu_pinmux_sensor_dvt2,
+			ARRAY_SIZE(cardhu_pinmux_sensor_dvt2));
+	
 	tegra_drive_pinmux_config_table(cardhu_drive_pinmux,
 					ARRAY_SIZE(cardhu_drive_pinmux));
 	tegra_pinmux_config_table(acer_t30_pinmux,
 					ARRAY_SIZE(acer_t30_pinmux));
 	cardhu_pinmux_audio_init();
-
-	return 0;
-}
-
-#define PIN_GPIO_LPM(_name, _gpio, _is_input, _value)	\
-	{					\
-		.name		= _name,	\
-		.gpio_nr	= _gpio,	\
-		.is_gpio	= true,		\
-		.is_input	= _is_input,	\
-		.value		= _value,	\
-	}
-
-struct gpio_init_pin_info pin_lpm_cardhu_common[] = {
-};
-
-static void set_unused_pin_gpio(struct gpio_init_pin_info *lpm_pin_info,
-		int list_count)
-{
-	int i;
-	struct gpio_init_pin_info *pin_info;
-	int ret;
-
-	for (i = 0; i < list_count; ++i) {
-		pin_info = (struct gpio_init_pin_info *)(lpm_pin_info + i);
-		if (!pin_info->is_gpio)
-			continue;
-
-		ret = gpio_request(pin_info->gpio_nr, pin_info->name);
-		if (ret < 0) {
-			pr_err("%s() Error in gpio_request() for gpio %d\n",
-					__func__, pin_info->gpio_nr);
-			continue;
-		}
-		if (pin_info->is_input)
-			ret = gpio_direction_input(pin_info->gpio_nr);
-		else
-			ret = gpio_direction_output(pin_info->gpio_nr,
-							pin_info->value);
-		if (ret < 0) {
-			pr_err("%s() Error in setting gpio %d to in/out\n",
-				__func__, pin_info->gpio_nr);
-			gpio_free(pin_info->gpio_nr);
-			continue;
-		}
-	}
-}
-
-/* Initialize the pins to desired state as per power/asic/system-eng
- * recomendation */
-int __init cardhu_pins_state_init(void)
-{
-	set_unused_pin_gpio(&pin_lpm_cardhu_common[0],
-	ARRAY_SIZE(pin_lpm_cardhu_common));
 
 	return 0;
 }

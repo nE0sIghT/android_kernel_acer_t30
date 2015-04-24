@@ -172,6 +172,10 @@ struct nvhost_driver {
 	/* Allocates a context handler for the device */
 	struct nvhost_hwctx_handler *(*alloc_hwctx_handler)(u32 syncpt,
 			u32 waitbase, struct nvhost_channel *ch);
+
+	/* Clock gating callbacks */
+	int (*prepare_clockoff)(struct nvhost_device *dev);
+	void (*finalize_clockon)(struct nvhost_device *dev);
 };
 
 extern int nvhost_driver_register(struct nvhost_driver *);
@@ -210,5 +214,9 @@ int nvhost_syncpt_wait_timeout_ext(struct nvhost_device *dev, u32 id, u32 thresh
 	u32 timeout, u32 *value);
 
 void nvhost_scale3d_set_throughput_hint(int hint);
+
+/* Hacky way to get access to struct nvhost_device tegra_vi01_device. */
+struct nvhost_device *t20_get_tegra_vi01_device(void);
+struct nvhost_device *t30_get_tegra_vi01_device(void);
 
 #endif

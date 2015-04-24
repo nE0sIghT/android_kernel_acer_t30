@@ -1,9 +1,9 @@
 /*
+ * Copyright (c) 2011-2013, NVIDIA CORPORATION. All rights reserved.
+ *
  * drivers/video/tegra/nvmap/nvmap_dev.c
  *
  * User-space interface to nvmap
- *
- * Copyright (c) 2011-2012, NVIDIA Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -231,6 +231,16 @@ struct nvmap_handle *nvmap_get_handle_id(struct nvmap_client *client,
 	struct nvmap_handle_ref *ref;
 	struct nvmap_handle *h = NULL;
 
+#if !defined(CONFIG_ARCH_ACER_T30)
+	/* Allow the handle to be accessed by other (non-owner)
+	clients only if the owner is "videobuf2-dma-nvmap",
+	which is a V4L2 capture kernel module. This handle can
+	be accessed by the "user" client for rendering */
+	if (!strcmp(((struct nvmap_handle *)id)->owner->name,
+				"videobuf2-dma-nvmap"))
+		client = ((struct nvmap_handle *)id)->owner;
+#endif
+
 	nvmap_ref_lock(client);
 	ref = _nvmap_validate_id_locked(client, id);
 	if (ref)
@@ -290,7 +300,7 @@ int nvmap_flush_heap_block(struct nvmap_client *client,
 	if (prot == NVMAP_HANDLE_UNCACHEABLE || prot == NVMAP_HANDLE_WRITE_COMBINE)
 		goto out;
 
-	if (len >= FLUSH_CLEAN_BY_SET_WAY_THRESHOLD) {
+	if (len >= FLUSH_CLEAN_BY_SET_WAY_THRESHOLD_INNER) {
 		inner_flush_cache_all();
 		if (prot != NVMAP_HANDLE_INNER_CACHEABLE)
 			outer_flush_range(block->base, block->base + len);
@@ -886,10 +896,11 @@ static void nvmap_vma_open(struct vm_area_struct *vma)
 	struct nvmap_vma_priv *priv;
 
 	priv = vma->vm_private_data;
-
 	BUG_ON(!priv);
 
 	atomic_inc(&priv->count);
+	if(priv->handle)
+		nvmap_usecount_inc(priv->handle);
 }
 
 static void nvmap_vma_close(struct vm_area_struct *vma)
@@ -898,8 +909,8 @@ static void nvmap_vma_close(struct vm_area_struct *vma)
 
 	if (priv) {
 		if (priv->handle) {
+			BUG_ON(priv->handle->usecount == 0);
 			nvmap_usecount_dec(priv->handle);
-			BUG_ON(priv->handle->usecount < 0);
 		}
 		if (!atomic_dec_return(&priv->count)) {
 			if (priv->handle)
